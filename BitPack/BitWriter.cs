@@ -19,12 +19,13 @@ public class BitWriter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteBool(bool value)
     {
+        var byteIndex = _bitPosition >> 3;
+        var bitOffset = _bitPosition & 7;
+        var mask = (byte)(1 << bitOffset);
         if (value)
-        {
-            var byteIndex = _bitPosition >> 3;
-            var bitOffset = _bitPosition & 7;
-            _buffer[byteIndex] |= (byte)(1 << bitOffset);
-        }
+            _buffer[byteIndex] |= mask;
+        else
+            _buffer[byteIndex] &= (byte)~mask;
         _bitPosition++;
     }
 
@@ -45,30 +46,56 @@ public class BitWriter
     {
         if (bitCount <= 0) return;
 
-        // Mask the value to the specified bitCount to avoid writing garbage bits
-        if (bitCount < 64)
+        // Branchless mask: works for bitCount 1-64
+        // For bitCount=64: MaxValue >> 0 = MaxValue
+        // For bitCount=1:  MaxValue >> 63 = 1
+        var mask = ulong.MaxValue >> (64 - bitCount);
+        var uValue = (ulong)value & mask;
+
+        var byteIndex = _bitPosition >> 3;
+        var bitOffset = _bitPosition & 7;
+
+        if (byteIndex + 9 <= _buffer.Length)
         {
-            value &= (1L << bitCount) - 1;
+            var currentWord = Unsafe.ReadUnaligned<ulong>(ref _buffer[byteIndex]);
+
+            var shiftedValue = uValue << bitOffset;
+            var targetMask = mask << bitOffset;
+
+            currentWord = (currentWord & ~targetMask) | shiftedValue;
+            Unsafe.WriteUnaligned(ref _buffer[byteIndex], currentWord);
+
+            var bitsWritten = 64 - bitOffset;
+            if (bitsWritten < bitCount)
+            {
+                var remBits = bitCount - bitsWritten;
+                var remValue = (int)(uValue >> bitsWritten);
+                var remMask = (1 << remBits) - 1;
+                ref var remByte = ref _buffer[byteIndex + 8];
+                remByte = (byte)((remByte & ~remMask) | remValue);
+            }
         }
-
-        var bitsRemaining = bitCount;
-        var currentVal = value;
-        var currentBitPos = _bitPosition;
-
-        while (bitsRemaining > 0)
+        else
         {
-            var bIndex = currentBitPos >> 3;
-            var bOffset = currentBitPos & 7;
-            var bitsToWrite = Math.Min(bitsRemaining, 8 - bOffset);
+            var bitsRemaining = bitCount;
+            var currentVal = uValue;
+            var currentBitPos = _bitPosition;
 
-            var mask = (1 << bitsToWrite) - 1;
-            var byteBits = (int)(currentVal & mask);
+            while (bitsRemaining > 0)
+            {
+                var bIndex = currentBitPos >> 3;
+                var bOffset = currentBitPos & 7;
+                var bitsToWrite = Math.Min(bitsRemaining, 8 - bOffset);
 
-            _buffer[bIndex] = (byte)((_buffer[bIndex] & ~(mask << bOffset)) | (byteBits << bOffset));
+                var byteMask = (1 << bitsToWrite) - 1;
+                var byteBits = (int)(currentVal & (ulong)byteMask);
 
-            currentVal >>= bitsToWrite;
-            currentBitPos += bitsToWrite;
-            bitsRemaining -= bitsToWrite;
+                _buffer[bIndex] = (byte)((_buffer[bIndex] & ~(byteMask << bOffset)) | (byteBits << bOffset));
+
+                currentVal >>= bitsToWrite;
+                currentBitPos += bitsToWrite;
+                bitsRemaining -= bitsToWrite;
+            }
         }
 
         _bitPosition += bitCount;
@@ -142,17 +169,55 @@ public class BitWriter
         var lenBits = CalculateBitsNeeded(maxBytes);
         WriteInt(bytesWritten, lenBits);
 
-        for (var i = 0; i < bytesWritten; i++)
+        WriteBytes(tempBytes.Slice(0, bytesWritten));
+    }
+
+    /// <summary>
+    /// Writes a block of bytes to the bitstream.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void WriteBytes(ReadOnlySpan<byte> source)
+    {
+        if (source.IsEmpty) return;
+
+        var byteIndex = _bitPosition >> 3;
+        var bitOffset = _bitPosition & 7;
+
+        if (bitOffset == 0)
         {
-            WriteInt(tempBytes[i], 8);
+            source.CopyTo(_buffer.AsSpan(byteIndex, source.Length));
+            _bitPosition += source.Length * 8;
+        }
+        else
+        {
+            var invShift = 8 - bitOffset;
+            for (var i = 0; i < source.Length; i++)
+            {
+                byte b = source[i];
+                _buffer[byteIndex] = (byte)((_buffer[byteIndex] & ((1 << bitOffset) - 1)) | (b << bitOffset));
+                _buffer[byteIndex + 1] = (byte)((_buffer[byteIndex + 1] & ~((1 << bitOffset) - 1)) | (b >> invShift));
+                byteIndex++;
+            }
+            _bitPosition += source.Length * 8;
         }
     }
 
+    /// <summary>
+    /// Calculates the minimum number of bits needed to represent values 0..maxValue.
+    /// Uses integer bit manipulation instead of floating-point Math.Log.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int CalculateBitsNeeded(int maxValue)
     {
         if (maxValue <= 0) return 0;
-        return (int)Math.Ceiling(Math.Log(maxValue + 1, 2));
+        var bits = 1;
+        var v = maxValue;
+        while (v > 1)
+        {
+            bits++;
+            v >>= 1;
+        }
+        return bits;
     }
 
     /// <summary>
@@ -162,10 +227,11 @@ public class BitWriter
 
     /// <summary>
     /// Reset the writer state to start writing from the beginning.
+    /// No buffer clear is needed because WriteLong and WriteBool explicitly
+    /// mask and overwrite all target bits during each write operation.
     /// </summary>
     public void Reset()
     {
         _bitPosition = 0;
-        Array.Clear(_buffer, 0, _buffer.Length);
     }
 }

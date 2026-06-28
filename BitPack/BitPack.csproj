@@ -24,6 +24,7 @@
   <ItemGroup>
     <!-- Reference the Source Generator project as an Analyzer during compilation -->
     <ProjectReference Include="..\BitPack.Generator\BitPack.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.0.0" />
   </ItemGroup>
 
   <Target Name="_AddAnalyzersToPackage">

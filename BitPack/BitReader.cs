@@ -43,29 +43,52 @@ public class BitReader
     {
         if (bitCount <= 0) return 0;
 
-        long value = 0;
-        var bitsRemaining = bitCount;
-        var currentBitPos = _bitPosition;
-        var shift = 0;
+        ulong value;
+        var byteIndex = _bitPosition >> 3;
+        var bitOffset = _bitPosition & 7;
 
-        while (bitsRemaining > 0)
+        if (byteIndex + 9 <= _buffer.Length)
         {
-            var bIndex = currentBitPos >> 3;
-            var bOffset = currentBitPos & 7;
-            var bitsToRead = Math.Min(bitsRemaining, 8 - bOffset);
+            var currentWord = Unsafe.ReadUnaligned<ulong>(ref _buffer[byteIndex]);
+            // Branchless mask: works for bitCount 1-64
+            var mask = ulong.MaxValue >> (64 - bitCount);
+            value = (currentWord >> bitOffset) & mask;
 
-            var mask = (1 << bitsToRead) - 1;
-            var byteBits = (_buffer[bIndex] >> bOffset) & mask;
+            var bitsRead = 64 - bitOffset;
+            if (bitsRead < bitCount)
+            {
+                var remBits = bitCount - bitsRead;
+                var remMask = (1UL << remBits) - 1;
+                ulong remValue = _buffer[byteIndex + 8];
+                value |= (remValue & remMask) << bitsRead;
+            }
+        }
+        else
+        {
+            value = 0;
+            var bitsRemaining = bitCount;
+            var currentBitPos = _bitPosition;
+            var shift = 0;
 
-            value |= ((long)byteBits << shift);
+            while (bitsRemaining > 0)
+            {
+                var bIndex = currentBitPos >> 3;
+                var bOffset = currentBitPos & 7;
+                var bitsToRead = Math.Min(bitsRemaining, 8 - bOffset);
 
-            shift += bitsToRead;
-            currentBitPos += bitsToRead;
-            bitsRemaining -= bitsToRead;
+                var mask = (1 << bitsToRead) - 1;
+                var byteBits = (_buffer[bIndex] >> bOffset) & mask;
+
+                value |= ((ulong)byteBits << shift);
+
+                shift += bitsToRead;
+                currentBitPos += bitsToRead;
+                bitsRemaining -= bitsToRead;
+            }
         }
 
         _bitPosition += bitCount;
-        return value;
+        return (long)value;
     }
 
     /// <summary>
@@ -131,19 +154,58 @@ public class BitReader
         if (length == 0) return string.Empty;
 
         Span<byte> bytes = length <= 256 ? stackalloc byte[length] : new byte[length];
-        for (var i = 0; i < length; i++)
-        {
-            bytes[i] = (byte)ReadInt(8);
-        }
+        ReadBytes(bytes);
 
         return System.Text.Encoding.UTF8.GetString(bytes);
     }
 
+    /// <summary>
+    /// Reads a block of bytes from the bitstream.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void ReadBytes(Span<byte> destination)
+    {
+        if (destination.IsEmpty) return;
+
+        var byteIndex = _bitPosition >> 3;
+        var bitOffset = _bitPosition & 7;
+
+        if (bitOffset == 0)
+        {
+            _buffer.AsSpan(byteIndex, destination.Length).CopyTo(destination);
+            _bitPosition += destination.Length * 8;
+        }
+        else
+        {
+            var invShift = 8 - bitOffset;
+            var mask = (1 << bitOffset) - 1;
+            for (var i = 0; i < destination.Length; i++)
+            {
+                var b0 = _buffer[byteIndex] >> bitOffset;
+                var b1 = (_buffer[byteIndex + 1] & mask) << invShift;
+                destination[i] = (byte)(b0 | b1);
+                byteIndex++;
+            }
+            _bitPosition += destination.Length * 8;
+        }
+    }
+
+    /// <summary>
+    /// Calculates the minimum number of bits needed to represent values 0..maxValue.
+    /// Uses integer bit manipulation instead of floating-point Math.Log.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int CalculateBitsNeeded(int maxValue)
     {
         if (maxValue <= 0) return 0;
-        return (int)Math.Ceiling(Math.Log(maxValue + 1, 2));
+        var bits = 1;
+        var v = maxValue;
+        while (v > 1)
+        {
+            bits++;
+            v >>= 1;
+        }
+        return bits;
     }
 
     /// <summary>

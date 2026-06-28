@@ -14,7 +14,7 @@ public class PacketGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor UnsupportedTypeError = new(
         id: "BP0001",
         title: "Unsupported Property Type",
-        messageFormat: "Property '{0}' of type '{1}' must be annotated with [BitPacket] or implement custom serialization (Serialize and static Deserialize).",
+        messageFormat: "Property '{0}' of type '{1}' must be annotated with [BitPacket] or implement custom serialization (Serialize and static Deserialize)",
         category: "BitPackGenerator",
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -521,7 +521,7 @@ public class PacketGenerator : IIncrementalGenerator
             {
                 var castStr = propType.SpecialType == SpecialType.System_Single ? "float" : "double";
                 if (isWriting)
-                    sb.AppendLine($"        writer.WriteLong((long)Math.Round(({propName} - ({minVal})) * {scale}d), {bits});");
+                    sb.AppendLine($"        writer.WriteLong((long)(({propName} - ({minVal})) * {scale}d + 0.5d), {bits});");
                 else
                     sb.AppendLine($"        {propName} = ({castStr})((double)reader.ReadLong({bits}) / {scale}d + ({minVal}));");
             }

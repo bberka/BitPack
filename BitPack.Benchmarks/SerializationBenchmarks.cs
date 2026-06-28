@@ -205,10 +205,10 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public SimplePacket Deserialize_Simple_BitPack()
+    public int Deserialize_Simple_BitPack()
     {
         _simpleBitReader.Reset();
-        return SimplePacket.Read(_simpleBitReader);
+        return SimplePacket.Read(_simpleBitReader).Value1;
     }
 
     [Benchmark]
@@ -220,10 +220,10 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public SimplePacket Deserialize_Simple_MemoryPack()
+    public int Deserialize_Simple_MemoryPack()
     {
         var readSpan = new ReadOnlySpan<byte>(_simpleMemPackBuffer, 0, _simpleMemPackLen);
-        return MemoryPackSerializer.Deserialize<SimplePacket>(readSpan);
+        return MemoryPackSerializer.Deserialize<SimplePacket>(readSpan).Value1;
     }
 
     [Benchmark]
@@ -235,10 +235,10 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public SimplePacket Deserialize_Simple_MessagePack()
+    public int Deserialize_Simple_MessagePack()
     {
         var readSpan = new ReadOnlyMemory<byte>(_simpleMsgPackBuffer, 0, _simpleMsgPackLen);
-        return MessagePackSerializer.Deserialize<SimplePacket>(readSpan, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+        return MessagePackSerializer.Deserialize<SimplePacket>(readSpan, MessagePack.Resolvers.ContractlessStandardResolver.Options).Value1;
     }
 
     [Benchmark]
@@ -251,10 +251,10 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public SimplePacket Deserialize_Simple_ProtoBuf()
+    public int Deserialize_Simple_ProtoBuf()
     {
         using var ms = new MemoryStream(_simpleProtoBufBuffer, 0, _simpleProtoBufLen);
-        return Serializer.Deserialize<SimplePacket>(ms);
+        return Serializer.Deserialize<SimplePacket>(ms).Value1;
     }
 
     [Benchmark]
@@ -268,10 +268,10 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public SimplePacket Deserialize_Simple_JsonContext()
+    public int Deserialize_Simple_JsonContext()
     {
         var utf8Span = new ReadOnlySpan<byte>(_simpleJsonBuffer, 0, _simpleJsonLen);
-        return JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.SimplePacket)!;
+        return JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.SimplePacket)!.Value1;
     }
 
     // ==========================================
@@ -287,10 +287,10 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public ComplexPacket Deserialize_Complex_BitPack()
+    public int Deserialize_Complex_BitPack()
     {
         _complexBitReader.Reset();
-        return ComplexPacket.Read(_complexBitReader);
+        return ComplexPacket.Read(_complexBitReader).Value1;
     }
 
     [Benchmark]
@@ -302,10 +302,10 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public ComplexPacket Deserialize_Complex_MemoryPack()
+    public int Deserialize_Complex_MemoryPack()
     {
         var readSpan = new ReadOnlySpan<byte>(_complexMemPackBuffer, 0, _complexMemPackLen);
-        return MemoryPackSerializer.Deserialize<ComplexPacket>(readSpan);
+        return MemoryPackSerializer.Deserialize<ComplexPacket>(readSpan).Value1;
     }
 
     [Benchmark]
@@ -317,10 +317,10 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public ComplexPacket Deserialize_Complex_MessagePack()
+    public int Deserialize_Complex_MessagePack()
     {
         var readSpan = new ReadOnlyMemory<byte>(_complexMsgPackBuffer, 0, _complexMsgPackLen);
-        return MessagePackSerializer.Deserialize<ComplexPacket>(readSpan, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+        return MessagePackSerializer.Deserialize<ComplexPacket>(readSpan, MessagePack.Resolvers.ContractlessStandardResolver.Options).Value1;
     }
 
     [Benchmark]
@@ -333,10 +333,10 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public ComplexPacket Deserialize_Complex_ProtoBuf()
+    public int Deserialize_Complex_ProtoBuf()
     {
         using var ms = new MemoryStream(_complexProtoBufBuffer, 0, _complexProtoBufLen);
-        return Serializer.Deserialize<ComplexPacket>(ms);
+        return Serializer.Deserialize<ComplexPacket>(ms).Value1;
     }
 
     [Benchmark]
@@ -350,10 +350,10 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public ComplexPacket Deserialize_Complex_JsonContext()
+    public int Deserialize_Complex_JsonContext()
     {
         var utf8Span = new ReadOnlySpan<byte>(_complexJsonBuffer, 0, _complexJsonLen);
-        return JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.ComplexPacket)!;
+        return JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.ComplexPacket)!.Value1;
     }
 }
 

@@ -56,16 +56,16 @@ The following benchmarks compare serialization and deserialization of two packet
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Serialize_Simple_BitPack** | **38.05 ns** | **37.70 ns** | **0 B** |
-| **Deserialize_Simple_BitPack** | **29.96 ns** | **30.04 ns** | **0 B** |
-| Serialize_MemoryPack | 16.07 ns | 15.69 ns | 312 B |
-| Deserialize_MemoryPack | 0.41 ns | 0.41 ns | 0 B |
-| Serialize_MessagePack | 56.49 ns | 56.51 ns | 312 B |
-| Deserialize_MessagePack | 61.21 ns | 61.13 ns | 0 B |
-| Serialize_ProtoBuf | 157.28 ns | 157.43 ns | 64 B |
-| Deserialize_ProtoBuf | 166.57 ns | 166.23 ns | 88 B |
-| Serialize_SystemTextJson_Context | 272.27 ns | 272.09 ns | 512 B |
-| Deserialize_SystemTextJson_Context | 423.74 ns | 422.12 ns | 64 B |
+| **Serialize_Simple_BitPack** | **38.55 ns** | **38.55 ns** | **0 B** |
+| **Deserialize_Simple_BitPack** | **10.01 ns** | **9.84 ns** | **0 B** |
+| Serialize_MemoryPack | 14.64 ns | 14.36 ns | 312 B |
+| Deserialize_MemoryPack | 0.21 ns | 0.21 ns | 0 B |
+| Serialize_MessagePack | 50.20 ns | 49.96 ns | 312 B |
+| Deserialize_MessagePack | 61.82 ns | 61.82 ns | 0 B |
+| Serialize_ProtoBuf | 150.85 ns | 151.09 ns | 64 B |
+| Deserialize_ProtoBuf | 152.80 ns | 152.85 ns | 88 B |
+| Serialize_SystemTextJson_Context | 246.02 ns | 246.00 ns | 512 B |
+| Deserialize_SystemTextJson_Context | 409.15 ns | 409.01 ns | 64 B |
 
 ---
 
@@ -85,16 +85,16 @@ The following benchmarks compare serialization and deserialization of two packet
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Serialize_Complex_BitPack** | **236.71 ns** | **236.49 ns** | **0 B** |
-| **Deserialize_Complex_BitPack** | **217.63 ns** | **217.09 ns** | **104 B** |
-| Serialize_MemoryPack | 48.24 ns | 47.99 ns | 312 B |
-| Deserialize_MemoryPack | 47.45 ns | 47.37 ns | 104 B |
-| Serialize_MessagePack | 127.95 ns | 127.86 ns | 312 B |
-| Deserialize_MessagePack | 187.99 ns | 187.31 ns | 104 B |
-| Serialize_ProtoBuf | 328.33 ns | 328.79 ns | 64 B |
-| Deserialize_Complex_ProtoBuf | 403.82 ns | 404.74 ns | 192 B |
-| Serialize_SystemTextJson_Context | 971.34 ns | 967.36 ns | 5016 B |
-| Deserialize_SystemTextJson_Context | 1239.88 ns | 1239.26 ns | 792 B |
+| **Serialize_Complex_BitPack** | **127.54 ns** | **127.44 ns** | **0 B** |
+| **Deserialize_Complex_BitPack** | **73.89 ns** | **73.55 ns** | **104 B** |
+| Serialize_MemoryPack | 42.82 ns | 42.65 ns | 312 B |
+| Deserialize_MemoryPack | 38.44 ns | 38.47 ns | 104 B |
+| Serialize_MessagePack | 119.16 ns | 119.32 ns | 312 B |
+| Deserialize_MessagePack | 177.00 ns | 176.58 ns | 104 B |
+| Serialize_ProtoBuf | 334.56 ns | 333.93 ns | 64 B |
+| Deserialize_Complex_ProtoBuf | 386.89 ns | 386.72 ns | 192 B |
+| Serialize_SystemTextJson_Context | 843.58 ns | 842.44 ns | 5016 B |
+| Deserialize_SystemTextJson_Context | 1164.12 ns | 1161.32 ns | 792 B |
 
 *Note on allocations:* The 104 bytes allocated during `Deserialize_Complex_BitPack` represent the two deserialized `string` objects themselves (`"Alex"` and `"Multiplayer Engine Pilot"`). BitPack's deserializer internals perform 0 garbage/helper allocations.
 
