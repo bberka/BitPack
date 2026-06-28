@@ -33,50 +33,70 @@ Install-Package BitPack
 
 ## Benchmark Results
 
-The following benchmarks compare the serialization and deserialization of a packet (`BenchmarkPacket`) containing an angle (`AimAngle`), moving state (`IsMoving`), ship class (`ShipClass`), and pilot name (`PilotName`):
+The following benchmarks compare serialization and deserialization of two packet structures under **High Process Priority** using **.NET 10.0**:
 
-```csharp
-[BitPacket]
-public partial record struct BenchmarkPacket
-{
-    [Range(0, 360)] public int AimAngle { get; set; }
-    public bool IsMoving { get; set; }
-    [Range(0, 3)] public byte ShipClass { get; set; }
-    [MaxLength(16)] public string PilotName { get; set; }
-}
-```
+1.  **Simple Packet (Primitive-only)**: Contains 12 properties (integer, float, double, byte, sbyte, short, ushort, ticks, and boolean states) with no string fields.
+2.  **Complex Packet**: Contains 12 properties including strings, DateTimes, enums, and nested structs.
 
-### Wire Payload Sizes
+---
 
+### 1. Simple Packet Benchmarks (12 Properties, No Strings)
+
+#### Wire Payload Sizes
 | Serializer | Wire Size (Bytes) | Bandwidth Saved vs MessagePack | Bandwidth Saved vs JSON |
 | :--- | :---: | :---: | :---: |
-| **BitPack** | **7 bytes** | **36.3%** | **89.2%** |
-| MemoryPack | 10 bytes | 9.0% | 84.6% |
-| MessagePack | 11 bytes | Reference | 83.0% |
-| protobuf-net | 15 bytes | -36.3% | 76.9% |
-| Nerdbank.MessagePack | 49 bytes | -345.4% | 24.6% |
-| System.Text.Json (AOT) | 65 bytes | -490.9% | Reference |
+| **BitPack** | **17 bytes** | **61.4%** | **92.2%** |
+| MemoryPack | 38 bytes | 13.6% | 82.5% |
+| MessagePack | 44 bytes | Reference | 79.8% |
+| protobuf-net | 47 bytes | -6.8% | 78.4% |
+| System.Text.Json | 218 bytes | -395.4% | Reference |
 
-### Execution Speed and Allocations
-
+#### Execution Speed & Allocations
 *BenchmarkDotNet v0.13.12, .NET 10.0 (X64 RyuJIT AVX2)*
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Serialize_BitPack** | **33.00 ns** | **32.76 ns** | **0 B** |
-| **Deserialize_BitPack** | **44.86 ns** | **44.90 ns** | **32 B** |
-| Serialize_MemoryPack | 32.42 ns | 31.54 ns | 48 B |
-| Deserialize_MemoryPack | 18.81 ns | 18.81 ns | 32 B |
-| Serialize_MessagePack | 35.35 ns | 35.35 ns | 40 B |
-| Deserialize_MessagePack | 58.58 ns | 58.60 ns | 72 B |
-| Serialize_ProtoBuf | 72.00 ns | 72.04 ns | 64 B |
-| Deserialize_ProtoBuf | 102.64 ns | 102.97 ns | 120 B |
-| Serialize_SystemTextJson_Context | 101.83 ns | 99.50 ns | 512 B |
-| Deserialize_SystemTextJson_Context | 154.85 ns | 154.63 ns | 64 B |
-| Serialize_SystemTextJson_Dynamic | 131.94 ns | 131.36 ns | 544 B |
-| Deserialize_SystemTextJson_Dynamic | 155.75 ns | 156.41 ns | 64 B |
+| **Serialize_Simple_BitPack** | **38.05 ns** | **37.70 ns** | **0 B** |
+| **Deserialize_Simple_BitPack** | **29.96 ns** | **30.04 ns** | **0 B** |
+| Serialize_MemoryPack | 16.07 ns | 15.69 ns | 312 B |
+| Deserialize_MemoryPack | 0.41 ns | 0.41 ns | 0 B |
+| Serialize_MessagePack | 56.49 ns | 56.51 ns | 312 B |
+| Deserialize_MessagePack | 61.21 ns | 61.13 ns | 0 B |
+| Serialize_ProtoBuf | 157.28 ns | 157.43 ns | 64 B |
+| Deserialize_ProtoBuf | 166.57 ns | 166.23 ns | 88 B |
+| Serialize_SystemTextJson_Context | 272.27 ns | 272.09 ns | 512 B |
+| Deserialize_SystemTextJson_Context | 423.74 ns | 422.12 ns | 64 B |
 
-Note on allocations: The 32 bytes allocated during Deserialize_BitPack represents the deserialized PilotName string object itself ("Alex"). BitPack's deserializer internals perform 0 helper allocations by utilizing stack-allocated spans.
+---
+
+### 2. Complex Packet Benchmarks (12 Properties, Strings, DateTime, Enum, Nested Structs)
+
+#### Wire Payload Sizes
+| Serializer | Wire Size (Bytes) | Bandwidth Saved vs MessagePack | Bandwidth Saved vs JSON |
+| :--- | :---: | :---: | :---: |
+| **BitPack** | **61 bytes** | **47.9%** | **89.5%** |
+| MemoryPack | 108 bytes | 7.7% | 81.4% |
+| MessagePack | 117 bytes | Reference | 79.8% |
+| protobuf-net | 120 bytes | -2.5% | 79.3% |
+| System.Text.Json | 581 bytes | -396.6% | Reference |
+
+#### Execution Speed & Allocations
+*BenchmarkDotNet v0.13.12, .NET 10.0 (X64 RyuJIT AVX2)*
+
+| Method | Mean Speed | Median Speed | Managed Allocated Memory |
+| :--- | :---: | :---: | :---: |
+| **Serialize_Complex_BitPack** | **236.71 ns** | **236.49 ns** | **0 B** |
+| **Deserialize_Complex_BitPack** | **217.63 ns** | **217.09 ns** | **104 B** |
+| Serialize_MemoryPack | 48.24 ns | 47.99 ns | 312 B |
+| Deserialize_MemoryPack | 47.45 ns | 47.37 ns | 104 B |
+| Serialize_MessagePack | 127.95 ns | 127.86 ns | 312 B |
+| Deserialize_MessagePack | 187.99 ns | 187.31 ns | 104 B |
+| Serialize_ProtoBuf | 328.33 ns | 328.79 ns | 64 B |
+| Deserialize_Complex_ProtoBuf | 403.82 ns | 404.74 ns | 192 B |
+| Serialize_SystemTextJson_Context | 971.34 ns | 967.36 ns | 5016 B |
+| Deserialize_SystemTextJson_Context | 1239.88 ns | 1239.26 ns | 792 B |
+
+*Note on allocations:* The 104 bytes allocated during `Deserialize_Complex_BitPack` represent the two deserialized `string` objects themselves (`"Alex"` and `"Multiplayer Engine Pilot"`). BitPack's deserializer internals perform 0 garbage/helper allocations.
 
 ---
 

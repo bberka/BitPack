@@ -15,211 +15,345 @@ namespace BitPack.Benchmarks;
 [MemoryDiagnoser]
 public class SerializationBenchmarks
 {
-    private byte[] _bitBuffer = null!;
-    private byte[] _jsonBuffer = null!;
-    private byte[] _msgPackBuffer = null!;
-    private byte[] _nbMsgPackBuffer = null!;
-    private byte[] _memPackBuffer = null!;
-    private byte[] _protoBufBuffer = null!;
-    
-    private int _jsonLen;
-    private int _msgPackLen;
-    private int _nbMsgPackLen;
-    private int _memPackLen;
-    private int _protoBufLen;
+    private byte[] _simpleBitBuffer = null!;
+    private byte[] _simpleJsonBuffer = null!;
+    private byte[] _simpleMsgPackBuffer = null!;
+    private byte[] _simpleNbMsgPackBuffer = null!;
+    private byte[] _simpleMemPackBuffer = null!;
+    private byte[] _simpleProtoBufBuffer = null!;
 
-    private BenchmarkPacket _testPacket;
+    private byte[] _complexBitBuffer = null!;
+    private byte[] _complexJsonBuffer = null!;
+    private byte[] _complexMsgPackBuffer = null!;
+    private byte[] _complexNbMsgPackBuffer = null!;
+    private byte[] _complexMemPackBuffer = null!;
+    private byte[] _complexProtoBufBuffer = null!;
     
-    private BitWriter _bitWriter = null!;
-    private BitReader _bitReader = null!;
+    private int _simpleJsonLen;
+    private int _simpleMsgPackLen;
+    private int _simpleNbMsgPackLen;
+    private int _simpleMemPackLen;
+    private int _simpleProtoBufLen;
+
+    private int _complexJsonLen;
+    private int _complexMsgPackLen;
+    private int _complexNbMsgPackLen;
+    private int _complexMemPackLen;
+    private int _complexProtoBufLen;
+
+    private SimplePacket _simplePacket;
+    private ComplexPacket _complexPacket;
+    
+    private BitWriter _simpleBitWriter = null!;
+    private BitReader _simpleBitReader = null!;
+
+    private BitWriter _complexBitWriter = null!;
+    private BitReader _complexBitReader = null!;
+    
     private Nerdbank.MessagePack.MessagePackSerializer _nbSerializer = null!;
 
     [GlobalSetup]
     public void Setup()
     {
-        _bitBuffer = new byte[256];
-        _jsonBuffer = new byte[256];
-        _msgPackBuffer = new byte[256];
-        _nbMsgPackBuffer = new byte[256];
-        _memPackBuffer = new byte[256];
-        _protoBufBuffer = new byte[256];
-        
-        _testPacket = new BenchmarkPacket
+        try
         {
-            AimAngle = 270,
-            IsMoving = true,
-            ShipClass = 2,
-            PilotName = "Alex"
+            System.Diagnostics.Process.GetCurrentProcess().PriorityClass = System.Diagnostics.ProcessPriorityClass.High;
+            Console.WriteLine("[Setup] Set process priority to High.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Setup] Failed to set process priority: {ex.Message}");
+        }
+
+        _simpleBitBuffer = new byte[512];
+        _simpleJsonBuffer = new byte[512];
+        _simpleMsgPackBuffer = new byte[512];
+        _simpleNbMsgPackBuffer = new byte[512];
+        _simpleMemPackBuffer = new byte[512];
+        _simpleProtoBufBuffer = new byte[512];
+
+        _complexBitBuffer = new byte[1024];
+        _complexJsonBuffer = new byte[1024];
+        _complexMsgPackBuffer = new byte[1024];
+        _complexNbMsgPackBuffer = new byte[1024];
+        _complexMemPackBuffer = new byte[1024];
+        _complexProtoBufBuffer = new byte[1024];
+
+        _simplePacket = new SimplePacket
+        {
+            Value1 = 789,
+            Flag1 = true,
+            Code1 = 8,
+            Speed = 45.67f,
+            Id1 = 987654321,
+            Score = 850.5,
+            Angle = 120,
+            Length = 3456,
+            Temperature = -15,
+            Ticks = 88888,
+            Flag2 = false,
+            Code2 = 220
         };
 
-        _bitWriter = new BitWriter(_bitBuffer);
-        _bitReader = new BitReader(_bitBuffer);
+        _complexPacket = new ComplexPacket
+        {
+            Name = "Alex",
+            Description = "Multiplayer Engine Pilot",
+            Value1 = 789,
+            Flag1 = true,
+            Code1 = 8,
+            Speed = 45.67f,
+            Id1 = 987654321,
+            Score = 850.5,
+            CreatedAt = DateTime.UtcNow,
+            InnerSimple = _simplePacket,
+            Snapshot = new InnerSnapshot { X = -234.56f, Y = 456.78f },
+            State = BenchmarkGameState.Playing
+        };
+
+        _simpleBitWriter = new BitWriter(_simpleBitBuffer);
+        _simpleBitReader = new BitReader(_simpleBitBuffer);
+
+        _complexBitWriter = new BitWriter(_complexBitBuffer);
+        _complexBitReader = new BitReader(_complexBitBuffer);
+
         _nbSerializer = new Nerdbank.MessagePack.MessagePackSerializer();
         
-        // 1. BitPack setup
-        _bitWriter.Reset();
-        _testPacket.Serialize(_bitWriter);
-        var bitSize = _bitWriter.BytesWritten;
+        // --- 1. Simple Packet Setup ---
+        _simpleBitWriter.Reset();
+        _simplePacket.Serialize(_simpleBitWriter);
+        var simpleBitSize = _simpleBitWriter.BytesWritten;
 
-        // 2. System.Text.Json setup
-        using (var ms = new MemoryStream(_jsonBuffer))
+        using (var ms = new MemoryStream(_simpleJsonBuffer))
         using (var writer = new Utf8JsonWriter(ms))
         {
-            JsonSerializer.Serialize(writer, _testPacket, BenchmarkPacketJsonContext.Default.BenchmarkPacket);
-            _jsonLen = (int)ms.Position;
+            JsonSerializer.Serialize(writer, _simplePacket, BenchmarkPacketJsonContext.Default.SimplePacket);
+            _simpleJsonLen = (int)ms.Position;
         }
 
-        // 3. MessagePack setup
-        var mpBytes = MessagePackSerializer.Serialize(_testPacket, MessagePack.Resolvers.ContractlessStandardResolver.Options);
-        Array.Copy(mpBytes, _msgPackBuffer, mpBytes.Length);
-        _msgPackLen = mpBytes.Length;
+        var sMpBytes = MessagePackSerializer.Serialize(_simplePacket, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+        Array.Copy(sMpBytes, _simpleMsgPackBuffer, sMpBytes.Length);
+        _simpleMsgPackLen = sMpBytes.Length;
 
-        // 4. Nerdbank.MessagePack setup
-        var nbBytes = _nbSerializer.Serialize(_testPacket);
-        Array.Copy(nbBytes, _nbMsgPackBuffer, nbBytes.Length);
-        _nbMsgPackLen = nbBytes.Length;
+        var sNbBytes = _nbSerializer.Serialize(_simplePacket);
+        Array.Copy(sNbBytes, _simpleNbMsgPackBuffer, sNbBytes.Length);
+        _simpleNbMsgPackLen = sNbBytes.Length;
 
-        // 5. MemoryPack setup
-        var memPackBytes = MemoryPackSerializer.Serialize(_testPacket);
-        Array.Copy(memPackBytes, _memPackBuffer, memPackBytes.Length);
-        _memPackLen = memPackBytes.Length;
+        var sMemPackBytes = MemoryPackSerializer.Serialize(_simplePacket);
+        Array.Copy(sMemPackBytes, _simpleMemPackBuffer, sMemPackBytes.Length);
+        _simpleMemPackLen = sMemPackBytes.Length;
 
-        // 6. ProtoBuf setup
-        using (var ms = new MemoryStream(_protoBufBuffer))
+        using (var ms = new MemoryStream(_simpleProtoBufBuffer))
         {
-            Serializer.Serialize(ms, _testPacket);
-            _protoBufLen = (int)ms.Position;
+            Serializer.Serialize(ms, _simplePacket);
+            _simpleProtoBufLen = (int)ms.Position;
         }
 
-        Console.WriteLine($"[Setup] BitPack Size: {bitSize} bytes.");
-        Console.WriteLine($"[Setup] System.Text.Json Size: {_jsonLen} bytes.");
-        Console.WriteLine($"[Setup] MessagePack Size: {_msgPackLen} bytes.");
-        Console.WriteLine($"[Setup] Nerdbank.MessagePack Size: {_nbMsgPackLen} bytes.");
-        Console.WriteLine($"[Setup] MemoryPack Size: {_memPackLen} bytes.");
-        Console.WriteLine($"[Setup] ProtoBuf Size: {_protoBufLen} bytes.");
+        // --- 2. Complex Packet Setup ---
+        _complexBitWriter.Reset();
+        _complexPacket.Serialize(_complexBitWriter);
+        var complexBitSize = _complexBitWriter.BytesWritten;
+
+        using (var ms = new MemoryStream(_complexJsonBuffer))
+        using (var writer = new Utf8JsonWriter(ms))
+        {
+            JsonSerializer.Serialize(writer, _complexPacket, BenchmarkPacketJsonContext.Default.ComplexPacket);
+            _complexJsonLen = (int)ms.Position;
+        }
+
+        var cMpBytes = MessagePackSerializer.Serialize(_complexPacket, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+        Array.Copy(cMpBytes, _complexMsgPackBuffer, cMpBytes.Length);
+        _complexMsgPackLen = cMpBytes.Length;
+
+        var cNbBytes = _nbSerializer.Serialize(_complexPacket);
+        Array.Copy(cNbBytes, _complexNbMsgPackBuffer, cNbBytes.Length);
+        _complexNbMsgPackLen = cNbBytes.Length;
+
+        var cMemPackBytes = MemoryPackSerializer.Serialize(_complexPacket);
+        Array.Copy(cMemPackBytes, _complexMemPackBuffer, cMemPackBytes.Length);
+        _complexMemPackLen = cMemPackBytes.Length;
+
+        using (var ms = new MemoryStream(_complexProtoBufBuffer))
+        {
+            Serializer.Serialize(ms, _complexPacket);
+            _complexProtoBufLen = (int)ms.Position;
+        }
+
+        Console.WriteLine($"[Setup] Simple BitPack Size: {simpleBitSize} bytes.");
+        Console.WriteLine($"[Setup] Simple JSON Size: {_simpleJsonLen} bytes.");
+        Console.WriteLine($"[Setup] Simple MessagePack Size: {_simpleMsgPackLen} bytes.");
+        Console.WriteLine($"[Setup] Simple MemoryPack Size: {_simpleMemPackLen} bytes.");
+        Console.WriteLine($"[Setup] Simple ProtoBuf Size: {_simpleProtoBufLen} bytes.");
+
+        Console.WriteLine($"[Setup] Complex BitPack Size: {complexBitSize} bytes.");
+        Console.WriteLine($"[Setup] Complex JSON Size: {_complexJsonLen} bytes.");
+        Console.WriteLine($"[Setup] Complex MessagePack Size: {_complexMsgPackLen} bytes.");
+        Console.WriteLine($"[Setup] Complex MemoryPack Size: {_complexMemPackLen} bytes.");
+        Console.WriteLine($"[Setup] Complex ProtoBuf Size: {_complexProtoBufLen} bytes.");
     }
 
-    // --- BitPack ---
+    // ==========================================
+    // SECTION A: SIMPLE PACKET BENCHMARKS
+    // ==========================================
 
     [Benchmark]
-    public int Serialize_BitPack()
+    public int Serialize_Simple_BitPack()
     {
-        _bitWriter.Reset();
-        _testPacket.Serialize(_bitWriter);
-        return _bitWriter.BytesWritten;
-    }
-
-    [Benchmark]
-    public BenchmarkPacket Deserialize_BitPack()
-    {
-        _bitReader.Reset();
-        var packet = new BenchmarkPacket();
-        packet.Deserialize(_bitReader);
-        return packet;
-    }
-
-    // --- MessagePack ---
-
-    [Benchmark]
-    public int Serialize_MessagePack()
-    {
-        var bytes = MessagePackSerializer.Serialize(_testPacket, MessagePack.Resolvers.ContractlessStandardResolver.Options);
-        return bytes.Length;
-    }
-
-    [Benchmark]
-    public BenchmarkPacket Deserialize_MessagePack()
-    {
-        var utf8Span = new ReadOnlySpan<byte>(_msgPackBuffer, 0, _msgPackLen);
-        return MessagePackSerializer.Deserialize<BenchmarkPacket>(utf8Span.ToArray(), MessagePack.Resolvers.ContractlessStandardResolver.Options);
-    }
-
-    // --- Nerdbank.MessagePack ---
-
-    [Benchmark]
-    public int Serialize_NerdbankMessagePack()
-    {
-        var bytes = _nbSerializer.Serialize(_testPacket);
-        return bytes.Length;
-    }
-
-    [Benchmark]
-    public BenchmarkPacket Deserialize_NerdbankMessagePack()
-    {
-        var sequence = new ReadOnlySequence<byte>(_nbMsgPackBuffer, 0, _nbMsgPackLen);
-        return _nbSerializer.Deserialize<BenchmarkPacket>(sequence);
-    }
-
-    // --- MemoryPack ---
-
-    [Benchmark]
-    public int Serialize_MemoryPack()
-    {
-        var bytes = MemoryPackSerializer.Serialize(_testPacket);
-        return bytes.Length;
+        _simpleBitWriter.Reset();
+        _simplePacket.Serialize(_simpleBitWriter);
+        return _simpleBitWriter.BytesWritten;
     }
 
     [Benchmark]
-    public BenchmarkPacket Deserialize_MemoryPack()
+    public SimplePacket Deserialize_Simple_BitPack()
     {
-        var utf8Span = new ReadOnlySpan<byte>(_memPackBuffer, 0, _memPackLen);
-        return MemoryPackSerializer.Deserialize<BenchmarkPacket>(utf8Span)!;
+        _simpleBitReader.Reset();
+        return SimplePacket.Read(_simpleBitReader);
     }
 
-    // --- ProtoBuf ---
+    [Benchmark]
+    public int Serialize_Simple_MemoryPack()
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        MemoryPackSerializer.Serialize(buffer, _simplePacket);
+        return buffer.WrittenCount;
+    }
 
     [Benchmark]
-    public int Serialize_ProtoBuf()
+    public SimplePacket Deserialize_Simple_MemoryPack()
     {
-        using var ms = new MemoryStream(_protoBufBuffer);
+        var readSpan = new ReadOnlySpan<byte>(_simpleMemPackBuffer, 0, _simpleMemPackLen);
+        return MemoryPackSerializer.Deserialize<SimplePacket>(readSpan);
+    }
+
+    [Benchmark]
+    public int Serialize_Simple_MessagePack()
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        MessagePackSerializer.Serialize(buffer, _simplePacket, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+        return buffer.WrittenCount;
+    }
+
+    [Benchmark]
+    public SimplePacket Deserialize_Simple_MessagePack()
+    {
+        var readSpan = new ReadOnlyMemory<byte>(_simpleMsgPackBuffer, 0, _simpleMsgPackLen);
+        return MessagePackSerializer.Deserialize<SimplePacket>(readSpan, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+    }
+
+    [Benchmark]
+    public int Serialize_Simple_ProtoBuf()
+    {
+        using var ms = new MemoryStream(_simpleProtoBufBuffer);
         ms.Position = 0;
-        Serializer.Serialize(ms, _testPacket);
+        Serializer.Serialize(ms, _simplePacket);
         return (int)ms.Position;
     }
 
     [Benchmark]
-    public BenchmarkPacket Deserialize_ProtoBuf()
+    public SimplePacket Deserialize_Simple_ProtoBuf()
     {
-        using var ms = new MemoryStream(_protoBufBuffer, 0, _protoBufLen);
-        return Serializer.Deserialize<BenchmarkPacket>(ms);
-    }
-
-    // --- System.Text.Json (Source Gen Context) ---
-
-    [Benchmark]
-    public int Serialize_SystemTextJson_Context()
-    {
-        using var ms = new MemoryStream(_jsonBuffer);
-        ms.Position = 0;
-        using var writer = new Utf8JsonWriter(ms);
-        JsonSerializer.Serialize(writer, _testPacket, BenchmarkPacketJsonContext.Default.BenchmarkPacket);
-        return (int)ms.Position;
+        using var ms = new MemoryStream(_simpleProtoBufBuffer, 0, _simpleProtoBufLen);
+        return Serializer.Deserialize<SimplePacket>(ms);
     }
 
     [Benchmark]
-    public BenchmarkPacket Deserialize_SystemTextJson_Context()
+    public int Serialize_Simple_JsonContext()
     {
-        var utf8Span = new ReadOnlySpan<byte>(_jsonBuffer, 0, _jsonLen);
-        return JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.BenchmarkPacket)!;
-    }
-
-    // --- System.Text.Json (Dynamic Reflection) ---
-
-    [Benchmark]
-    public int Serialize_SystemTextJson_Dynamic()
-    {
-        using var ms = new MemoryStream(_jsonBuffer);
+        using var ms = new MemoryStream(_simpleJsonBuffer);
         ms.Position = 0;
         using var writer = new Utf8JsonWriter(ms);
-        JsonSerializer.Serialize(writer, _testPacket);
+        JsonSerializer.Serialize(writer, _simplePacket, BenchmarkPacketJsonContext.Default.SimplePacket);
         return (int)ms.Position;
     }
 
     [Benchmark]
-    public BenchmarkPacket Deserialize_SystemTextJson_Dynamic()
+    public SimplePacket Deserialize_Simple_JsonContext()
     {
-        var utf8Span = new ReadOnlySpan<byte>(_jsonBuffer, 0, _jsonLen);
-        return JsonSerializer.Deserialize<BenchmarkPacket>(utf8Span)!;
+        var utf8Span = new ReadOnlySpan<byte>(_simpleJsonBuffer, 0, _simpleJsonLen);
+        return JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.SimplePacket)!;
+    }
+
+    // ==========================================
+    // SECTION B: COMPLEX PACKET BENCHMARKS
+    // ==========================================
+
+    [Benchmark]
+    public int Serialize_Complex_BitPack()
+    {
+        _complexBitWriter.Reset();
+        _complexPacket.Serialize(_complexBitWriter);
+        return _complexBitWriter.BytesWritten;
+    }
+
+    [Benchmark]
+    public ComplexPacket Deserialize_Complex_BitPack()
+    {
+        _complexBitReader.Reset();
+        return ComplexPacket.Read(_complexBitReader);
+    }
+
+    [Benchmark]
+    public int Serialize_Complex_MemoryPack()
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        MemoryPackSerializer.Serialize(buffer, _complexPacket);
+        return buffer.WrittenCount;
+    }
+
+    [Benchmark]
+    public ComplexPacket Deserialize_Complex_MemoryPack()
+    {
+        var readSpan = new ReadOnlySpan<byte>(_complexMemPackBuffer, 0, _complexMemPackLen);
+        return MemoryPackSerializer.Deserialize<ComplexPacket>(readSpan);
+    }
+
+    [Benchmark]
+    public int Serialize_Complex_MessagePack()
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        MessagePackSerializer.Serialize(buffer, _complexPacket, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+        return buffer.WrittenCount;
+    }
+
+    [Benchmark]
+    public ComplexPacket Deserialize_Complex_MessagePack()
+    {
+        var readSpan = new ReadOnlyMemory<byte>(_complexMsgPackBuffer, 0, _complexMsgPackLen);
+        return MessagePackSerializer.Deserialize<ComplexPacket>(readSpan, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+    }
+
+    [Benchmark]
+    public int Serialize_Complex_ProtoBuf()
+    {
+        using var ms = new MemoryStream(_complexProtoBufBuffer);
+        ms.Position = 0;
+        Serializer.Serialize(ms, _complexPacket);
+        return (int)ms.Position;
+    }
+
+    [Benchmark]
+    public ComplexPacket Deserialize_Complex_ProtoBuf()
+    {
+        using var ms = new MemoryStream(_complexProtoBufBuffer, 0, _complexProtoBufLen);
+        return Serializer.Deserialize<ComplexPacket>(ms);
+    }
+
+    [Benchmark]
+    public int Serialize_Complex_JsonContext()
+    {
+        using var ms = new MemoryStream(_complexJsonBuffer);
+        ms.Position = 0;
+        using var writer = new Utf8JsonWriter(ms);
+        JsonSerializer.Serialize(writer, _complexPacket, BenchmarkPacketJsonContext.Default.ComplexPacket);
+        return (int)ms.Position;
+    }
+
+    [Benchmark]
+    public ComplexPacket Deserialize_Complex_JsonContext()
+    {
+        var utf8Span = new ReadOnlySpan<byte>(_complexJsonBuffer, 0, _complexJsonLen);
+        return JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.ComplexPacket)!;
     }
 }
 
@@ -228,29 +362,63 @@ public class SerializationBenchmarks
 [PolyType.GenerateShape]
 [MemoryPackable]
 [ProtoContract]
-public partial record struct BenchmarkPacket
+public partial record struct SimplePacket
 {
-    [MessagePack.Key(0)]
-    [ProtoMember(1)]
-    [Range(0, 360)]
-    public int AimAngle { get; set; }
-
-    [MessagePack.Key(1)]
-    [ProtoMember(2)]
-    public bool IsMoving { get; set; }
-
-    [MessagePack.Key(2)]
-    [ProtoMember(3)]
-    [Range(0, 3)]
-    public byte ShipClass { get; set; }
-
-    [MessagePack.Key(3)]
-    [ProtoMember(4)]
-    [MaxLength(16)]
-    public string PilotName { get; set; }
+    [MessagePack.Key(0)] [ProtoMember(1)] [Range(0, 1000)] public int Value1 { get; set; }
+    [MessagePack.Key(1)] [ProtoMember(2)] public bool Flag1 { get; set; }
+    [MessagePack.Key(2)] [ProtoMember(3)] [Range(0, 10)] public byte Code1 { get; set; }
+    [MessagePack.Key(3)] [ProtoMember(4)] [Range(-100.0f, 100.0f)] [Precision(2)] public float Speed { get; set; }
+    [MessagePack.Key(4)] [ProtoMember(5)] [Range(0, 1000000000)] public long Id1 { get; set; }
+    [MessagePack.Key(5)] [ProtoMember(6)] [Range(0.0, 1000.0)] [Precision(1)] public double Score { get; set; }
+    [MessagePack.Key(6)] [ProtoMember(7)] [Range(-180, 180)] public short Angle { get; set; }
+    [MessagePack.Key(7)] [ProtoMember(8)] [Range(0, 5000)] public ushort Length { get; set; }
+    [MessagePack.Key(8)] [ProtoMember(9)] [Range(-40, 80)] public sbyte Temperature { get; set; }
+    [MessagePack.Key(9)] [ProtoMember(10)] [Range(0, 100000)] public uint Ticks { get; set; }
+    [MessagePack.Key(10)] [ProtoMember(11)] public bool Flag2 { get; set; }
+    [MessagePack.Key(11)] [ProtoMember(12)] [Range(0, 250)] public byte Code2 { get; set; }
 }
 
-[JsonSerializable(typeof(BenchmarkPacket))]
+[BitPacket]
+[MessagePackObject]
+[PolyType.GenerateShape]
+[MemoryPackable]
+[ProtoContract]
+public partial record struct ComplexPacket
+{
+    [MessagePack.Key(0)] [ProtoMember(1)] [MaxLength(16)] public string Name { get; set; }
+    [MessagePack.Key(1)] [ProtoMember(2)] [MaxLength(32)] public string Description { get; set; }
+    [MessagePack.Key(2)] [ProtoMember(3)] [Range(0, 1000)] public int Value1 { get; set; }
+    [MessagePack.Key(3)] [ProtoMember(4)] public bool Flag1 { get; set; }
+    [MessagePack.Key(4)] [ProtoMember(5)] [Range(0, 10)] public byte Code1 { get; set; }
+    [MessagePack.Key(5)] [ProtoMember(6)] [Range(-100.0f, 100.0f)] [Precision(2)] public float Speed { get; set; }
+    [MessagePack.Key(6)] [ProtoMember(7)] [Range(0, 1000000000)] public long Id1 { get; set; }
+    [MessagePack.Key(7)] [ProtoMember(8)] [Range(0.0, 1000.0)] [Precision(1)] public double Score { get; set; }
+    [MessagePack.Key(8)] [ProtoMember(9)] public DateTime CreatedAt { get; set; }
+    [MessagePack.Key(9)] [ProtoMember(10)] public SimplePacket InnerSimple { get; set; }
+    [MessagePack.Key(10)] [ProtoMember(11)] public InnerSnapshot Snapshot { get; set; }
+    [MessagePack.Key(11)] [ProtoMember(12)] public BenchmarkGameState State { get; set; }
+}
+
+[BitPacket]
+[MessagePackObject]
+[PolyType.GenerateShape]
+[MemoryPackable]
+[ProtoContract]
+public partial record struct InnerSnapshot
+{
+    [MessagePack.Key(0)] [ProtoMember(1)] [Range(-500.0f, 500.0f)] [Precision(2)] public float X { get; set; }
+    [MessagePack.Key(1)] [ProtoMember(2)] [Range(-500.0f, 500.0f)] [Precision(2)] public float Y { get; set; }
+}
+
+public enum BenchmarkGameState
+{
+    Idle = 0,
+    Playing = 1,
+    GameOver = 2
+}
+
+[JsonSerializable(typeof(SimplePacket))]
+[JsonSerializable(typeof(ComplexPacket))]
 internal partial class BenchmarkPacketJsonContext : JsonSerializerContext
 {
 }
