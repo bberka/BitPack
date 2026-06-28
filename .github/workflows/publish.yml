@@ -1,0 +1,95 @@
+name: Build, Test, and Publish
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'BitPack/**'
+      - 'VERSION'
+  workflow_dispatch:
+
+jobs:
+  build-test-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for OIDC / Trusted Publishing on nuget.org
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore Dependencies
+        run: dotnet restore BitPack.slnx
+
+      - name: Run Tests
+        run: dotnet test BitPack.slnx -c Release
+
+      - name: Compute Next Version
+        id: compute-version
+        run: |
+          # Read base version from VERSION file
+          BASE_VERSION=$(cat VERSION | tr -d '[:space:]')
+          echo "Base version from file: $BASE_VERSION"
+          
+          # Fetch published versions from NuGet
+          RESPONSE=$(curl -s https://api.nuget.org/v3-flatcontainer/bitpack/index.json)
+          
+          if [ $? -ne 0 ] || [ -z "$RESPONSE" ] || echo "$RESPONSE" | grep -q "Not Found"; then
+            # Package not published yet or not found
+            NEXT_VERSION="${BASE_VERSION}.0"
+          else
+            # Calculate next semver patch using Python
+            NEXT_VERSION=$(python3 -c "
+          import json
+          try:
+              data = json.loads('''$RESPONSE''')
+              versions = data.get('versions', [])
+          except Exception:
+              versions = []
+          
+          base = '$BASE_VERSION'
+          matched = []
+          for v in versions:
+              if v == base or v.startswith(base + '.'):
+                  matched.append(v)
+          
+          if not matched:
+              print(base + '.0')
+          else:
+              def parse_version(ver):
+                  parts = ver.split('.')
+                  while len(parts) < 3:
+                      parts.append('0')
+                  try:
+                      return [int(x) for x in parts]
+                  except ValueError:
+                      return [0, 0, 0]
+              
+              matched.sort(key=parse_version)
+              latest = matched[-1]
+              parts = parse_version(latest)
+              parts[2] += 1
+              print(f'{parts[0]}.{parts[1]}.{parts[2]}')
+          ")
+          fi
+          
+          echo "Computed next version: $NEXT_VERSION"
+          echo "VERSION=$NEXT_VERSION" >> $GITHUB_ENV
+
+      - name: Pack NuGet Package
+        run: dotnet pack BitPack/BitPack.csproj -c Release -o artifacts /p:Version=${{ env.VERSION }}
+
+      - name: NuGet Login (OIDC to temporary API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: bberka
+
+      - name: Publish to NuGet
+        run: dotnet nuget push artifacts/BitPack.${{ env.VERSION }}.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
