@@ -109,7 +109,7 @@ public class PacketGenerator : IIncrementalGenerator
         {
             sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
         }
-        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, isWriting: true, packetMaxVersion);
+        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, isWriting: true, packetMaxVersion);
         sourceBuilder.AppendLine("    }");
         sourceBuilder.AppendLine();
 
@@ -120,7 +120,7 @@ public class PacketGenerator : IIncrementalGenerator
         {
             sourceBuilder.AppendLine("        var packetVersion = reader.ReadInt(4);");
         }
-        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, isWriting: false, packetMaxVersion);
+        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, isWriting: false, packetMaxVersion);
         sourceBuilder.AppendLine("    }");
 
 
@@ -379,10 +379,8 @@ public class PacketGenerator : IIncrementalGenerator
         return false;
     }
 
-    private static void GenerateSerializationLoop(SourceProductionContext context, StringBuilder sb, ITypeSymbol typeSymbol, bool isWriting, int packetMaxVersion)
+    private static void GenerateSerializationLoop(SourceProductionContext context, StringBuilder sb, ITypeSymbol typeSymbol, List<SerializationTarget> targets, bool isWriting, int packetMaxVersion)
     {
-        var targets = GetSerializationTargets(typeSymbol);
-
         foreach (var target in targets)
         {
             var propVersion = GetPropertyVersion(target.Symbol);
@@ -487,29 +485,47 @@ public class PacketGenerator : IIncrementalGenerator
             var bits = GetEnumBits(propType, target.Symbol);
             if (isWriting)
             {
+                // Extract range for bounds checking
+                long enumMin = 0, enumMax = 0;
+                var rangeAttr = target.Symbol.GetAttributes()
+                    .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.RangeAttribute");
+                if (rangeAttr != null && rangeAttr.ConstructorArguments.Length >= 2)
+                {
+                    try { enumMin = Convert.ToInt64(rangeAttr.ConstructorArguments[0].Value); } catch { }
+                    try { enumMax = Convert.ToInt64(rangeAttr.ConstructorArguments[1].Value); } catch { }
+                }
+                else
+                {
+                    foreach (var field in propType.GetMembers().OfType<IFieldSymbol>())
+                    {
+                        if (field.HasConstantValue)
+                        {
+                            var val = Convert.ToInt64(field.ConstantValue);
+                            if (val > enumMax) enumMax = val;
+                            if (val < enumMin) enumMin = val;
+                        }
+                    }
+                }
+                sb.AppendLine($"        if ((int){propName} < {enumMin} || (int){propName} > {enumMax}) throw new ArgumentOutOfRangeException(nameof({propName}), (object){propName}, $\"Enum value must be within [{enumMin}, {enumMax}].\");");
                 sb.AppendLine($"        writer.WriteInt((int){propName}, {bits});");
             }
             else
             {
                 var enumFields = propType.GetMembers().OfType<IFieldSymbol>().Where(f => f.HasConstantValue).ToList();
                 var enumTypeName = propType.ToDisplayString();
-                sb.AppendLine($"        var temp{target.Name} = reader.ReadInt({bits});");
-                sb.AppendLine($"        {propName} = temp{target.Name} switch");
-                sb.AppendLine("        {");
+                long maxVal = 0;
                 long defaultVal = 0;
                 bool hasZero = false;
                 foreach (var field in enumFields)
                 {
                     var val = Convert.ToInt64(field.ConstantValue);
+                    if (val > maxVal) maxVal = val;
                     if (val == 0) hasZero = true;
-                    sb.AppendLine($"            {val} => ({enumTypeName}){val},");
                 }
                 if (!hasZero && enumFields.Count > 0)
-                {
                     defaultVal = Convert.ToInt64(enumFields[0].ConstantValue);
-                }
-                sb.AppendLine($"            _ => ({enumTypeName}){defaultVal}");
-                sb.AppendLine("        };");
+                sb.AppendLine($"        var temp{target.Name} = reader.ReadInt({bits});");
+                sb.AppendLine($"        {propName} = temp{target.Name} <= {maxVal} ? ({enumTypeName})temp{target.Name} : ({enumTypeName}){defaultVal};");
             }
         }
         // 6. Floating-point (float, double) with fixed-point quantization
@@ -521,7 +537,10 @@ public class PacketGenerator : IIncrementalGenerator
             {
                 var castStr = propType.SpecialType == SpecialType.System_Single ? "float" : "double";
                 if (isWriting)
+                {
+                    sb.AppendLine($"        if ({propName} < {minVal} || {propName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({propName}), {propName}, $\"Value must be within [{minVal}, {maxVal}].\");");
                     sb.AppendLine($"        writer.WriteLong((long)(({propName} - ({minVal})) * {scale}d + 0.5d), {bits});");
+                }
                 else
                     sb.AppendLine($"        {propName} = ({castStr})((double)reader.ReadLong({bits}) / {scale}d + ({minVal}));");
             }
@@ -560,7 +579,10 @@ public class PacketGenerator : IIncrementalGenerator
             if (isWriting)
             {
                 if (hasConstraint)
+                {
+                    sb.AppendLine($"        if ({propName} < {minVal} || {propName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({propName}), {propName}, $\"Value must be within [{minVal}, {maxVal}].\");");
                     sb.AppendLine($"        writer.WriteLong((long)({propName} - ({minVal})), {bits});");
+                }
                 else
                     sb.AppendLine($"        writer.WriteLong((long){propName}, {bits});");
             }
@@ -578,7 +600,10 @@ public class PacketGenerator : IIncrementalGenerator
             if (isWriting)
             {
                 if (hasConstraint)
+                {
+                    sb.AppendLine($"        if ({propName} < {minVal} || {propName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({propName}), {propName}, $\"Value must be within [{minVal}, {maxVal}].\");");
                     sb.AppendLine($"        writer.WriteULong((ulong)({propName} - ({minVal})), {bits});");
+                }
                 else
                     sb.AppendLine($"        writer.WriteULong((ulong){propName}, {bits});");
             }
@@ -644,7 +669,10 @@ public class PacketGenerator : IIncrementalGenerator
             if (isWriting)
             {
                 if (hasConstraint)
+                {
+                    sb.AppendLine($"        if ({propName} < {minVal} || {propName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({propName}), {propName}, $\"Value must be within [{minVal}, {maxVal}].\");");
                     sb.AppendLine($"        writer.WriteULong((ulong)({propName} - ({minVal})), {bits});");
+                }
                 else
                     sb.AppendLine($"        writer.WriteULong((ulong){propName}, {bits});");
             }
@@ -673,7 +701,10 @@ public class PacketGenerator : IIncrementalGenerator
             if (isWriting)
             {
                 if (hasConstraint)
+                {
+                    sb.AppendLine($"        if ({propName} < {minVal} || {propName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({propName}), {propName}, $\"Value must be within [{minVal}, {maxVal}].\");");
                     sb.AppendLine($"        writer.WriteLong((long)({propName} - ({minVal})), {bits});");
+                }
                 else
                     sb.AppendLine($"        writer.WriteLong((long){propName}, {bits});");
             }

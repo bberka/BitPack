@@ -127,6 +127,35 @@ public partial record TestPrimaryCtorPacket(
     [property: MaxLength(16)] string Nickname
 );
 
+[BitPacket]
+public partial record TestRangeOverflowPacket
+{
+    [Range(0, 100)]    public int SmallValue { get; set; }
+    [Range(-180, 180)] public int Latitude  { get; set; }
+}
+
+[BitPacket]
+public partial record TestStringOverflowPacket
+{
+    [MaxLength(5)]      public string Name { get; set; } = "";
+    [StringLength(10)]  public string Bio  { get; set; } = "";
+}
+
+[BitPacket]
+public partial record TestQuantizedOverflowPacket
+{
+    [Range(-500.0, 500.0)]
+    [Precision(2)]
+    public float Coord { get; set; }
+}
+
+[BitPacket]
+public partial record TestEnumOverflowPacket
+{
+    [Range(0, 5)] public TestGameState SmallRangeState { get; set; }
+    public TestGameState AutoDetectState { get; set; }
+}
+
 public class SerializationTests
 {
     [Fact]
@@ -417,5 +446,204 @@ public partial class BadPacketNoSetter
         
         Assert.Contains(errors, e => e.GetMessage().Contains("must have a getter accessor"));
         Assert.Contains(errors, e => e.GetMessage().Contains("must have a setter or init accessor"));
+    }
+
+    [Fact]
+    public void GeneratedPacket_IntegerRangeOverflow_Throws()
+    {
+        var buffer = new byte[128];
+        var packet = new TestRangeOverflowPacket { SmallValue = 200, Latitude = 0 };
+
+        var writer = new BitWriter(buffer);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
+        Assert.Contains("SmallValue", ex.ParamName);
+        Assert.Contains("[0, 100]", ex.Message);
+    }
+
+    [Fact]
+    public void GeneratedPacket_IntegerRangeUnderflow_Throws()
+    {
+        var buffer = new byte[128];
+        var packet = new TestRangeOverflowPacket { SmallValue = -1, Latitude = 0 };
+
+        var writer = new BitWriter(buffer);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
+        Assert.Contains("SmallValue", ex.ParamName);
+        Assert.Contains("[0, 100]", ex.Message);
+    }
+
+    [Fact]
+    public void GeneratedPacket_NegativeRangeOverflow_Throws()
+    {
+        var buffer = new byte[128];
+        var packet = new TestRangeOverflowPacket { SmallValue = 0, Latitude = 200 };
+
+        var writer = new BitWriter(buffer);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
+        Assert.Contains("Latitude", ex.ParamName);
+        Assert.Contains("[-180, 180]", ex.Message);
+    }
+
+    [Fact]
+    public void GeneratedPacket_NegativeRangeUnderflow_Throws()
+    {
+        var buffer = new byte[128];
+        var packet = new TestRangeOverflowPacket { SmallValue = 0, Latitude = -200 };
+
+        var writer = new BitWriter(buffer);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
+        Assert.Contains("Latitude", ex.ParamName);
+        Assert.Contains("[-180, 180]", ex.Message);
+    }
+
+    [Fact]
+    public void GeneratedPacket_IntegerAtRangeBoundary_DoesNotThrow()
+    {
+        var buffer = new byte[128];
+
+        var packetAtMin = new TestRangeOverflowPacket { SmallValue = 0, Latitude = 0 };
+        var writer1 = new BitWriter(buffer);
+        packetAtMin.Serialize(writer1);
+
+        var reader1 = new BitReader(buffer);
+        var restoredMin = new TestRangeOverflowPacket();
+        restoredMin.Deserialize(reader1);
+        Assert.Equal(0, restoredMin.SmallValue);
+
+        buffer.AsSpan().Clear();
+        writer1.Reset();
+
+        var packetAtMax = new TestRangeOverflowPacket { SmallValue = 100, Latitude = 0 };
+        packetAtMax.Serialize(writer1);
+
+        var reader2 = new BitReader(buffer);
+        var restoredMax = new TestRangeOverflowPacket();
+        restoredMax.Deserialize(reader2);
+        Assert.Equal(100, restoredMax.SmallValue);
+    }
+
+    [Fact]
+    public void GeneratedPacket_StringMaxLengthOverflow_Throws()
+    {
+        var buffer = new byte[128];
+        var packet = new TestStringOverflowPacket { Name = "123456", Bio = "" };
+
+        var writer = new BitWriter(buffer);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
+        Assert.Contains("value", ex.ParamName);
+    }
+
+    [Fact]
+    public void GeneratedPacket_StringAtMaxLength_DoesNotThrow()
+    {
+        var buffer = new byte[128];
+        var packet = new TestStringOverflowPacket { Name = "12345", Bio = "" };
+
+        var writer = new BitWriter(buffer);
+        packet.Serialize(writer);
+
+        var reader = new BitReader(buffer);
+        var restored = new TestStringOverflowPacket();
+        restored.Deserialize(reader);
+        Assert.Equal("12345", restored.Name);
+    }
+
+    [Fact]
+    public void GeneratedPacket_StringLengthAttribute_RoundTrips()
+    {
+        var buffer = new byte[128];
+        var packet = new TestStringOverflowPacket { Name = "", Bio = "1234567890" };
+
+        var writer = new BitWriter(buffer);
+        packet.Serialize(writer);
+
+        var reader = new BitReader(buffer);
+        var restored = new TestStringOverflowPacket();
+        restored.Deserialize(reader);
+        Assert.Equal("1234567890", restored.Bio);
+    }
+
+    [Fact]
+    public void GeneratedPacket_StringLengthAttributeOverflow_Throws()
+    {
+        var buffer = new byte[128];
+        var packet = new TestStringOverflowPacket { Name = "", Bio = "12345678901" };
+
+        var writer = new BitWriter(buffer);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
+        Assert.Contains("value", ex.ParamName);
+    }
+
+    [Fact]
+    public void GeneratedPacket_QuantizedFloatRangeOverflow_Throws()
+    {
+        var buffer = new byte[128];
+        var packet = new TestQuantizedOverflowPacket { Coord = 600f };
+
+        var writer = new BitWriter(buffer);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
+        Assert.Contains("Coord", ex.ParamName);
+        Assert.Contains("[-500, 500]", ex.Message);
+    }
+
+    [Fact]
+    public void GeneratedPacket_QuantizedFloatRangeUnderflow_Throws()
+    {
+        var buffer = new byte[128];
+        var packet = new TestQuantizedOverflowPacket { Coord = -600f };
+
+        var writer = new BitWriter(buffer);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
+        Assert.Contains("Coord", ex.ParamName);
+        Assert.Contains("[-500, 500]", ex.Message);
+    }
+
+    [Fact]
+    public void GeneratedPacket_QuantizedFloatAtBoundary_DoesNotThrow()
+    {
+        var buffer = new byte[128];
+
+        var packetAtMax = new TestQuantizedOverflowPacket { Coord = 500f };
+        var writer = new BitWriter(buffer);
+        packetAtMax.Serialize(writer);
+
+        var reader = new BitReader(buffer);
+        var restoredMax = new TestQuantizedOverflowPacket();
+        restoredMax.Deserialize(reader);
+        Assert.Equal(500f, restoredMax.Coord, 2);
+
+        buffer.AsSpan().Clear();
+        writer.Reset();
+
+        var packetAtMin = new TestQuantizedOverflowPacket { Coord = -500f };
+        packetAtMin.Serialize(writer);
+
+        var reader2 = new BitReader(buffer);
+        var restoredMin = new TestQuantizedOverflowPacket();
+        restoredMin.Deserialize(reader2);
+        Assert.Equal(-500f, restoredMin.Coord, 2);
+    }
+
+    [Fact]
+    public void GeneratedPacket_EnumWithRangeOverflow_Throws()
+    {
+        var buffer = new byte[128];
+        var packet = new TestEnumOverflowPacket { SmallRangeState = (TestGameState)6, AutoDetectState = TestGameState.Idle };
+
+        var writer = new BitWriter(buffer);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
+        Assert.Contains("SmallRangeState", ex.ParamName);
+        Assert.Contains("[0, 5]", ex.Message);
+    }
+
+    [Fact]
+    public void GeneratedPacket_EnumAutoDetectOverflow_Throws()
+    {
+        var buffer = new byte[128];
+        var packet = new TestEnumOverflowPacket { SmallRangeState = TestGameState.Idle, AutoDetectState = (TestGameState)99 };
+
+        var writer = new BitWriter(buffer);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
+        Assert.Contains("AutoDetectState", ex.ParamName);
     }
 }

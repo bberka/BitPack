@@ -45,27 +45,29 @@ The following benchmarks compare serialization and deserialization of two packet
 #### Wire Payload Sizes
 | Serializer | Wire Size (Bytes) | Bandwidth Saved vs MessagePack | Bandwidth Saved vs JSON |
 | :--- | :---: | :---: | :---: |
-| **BitPack** | **17 bytes** | **61.4%** | **92.2%** |
-| MemoryPack | 38 bytes | 13.6% | 82.5% |
-| MessagePack | 44 bytes | Reference | 79.8% |
-| protobuf-net | 47 bytes | -6.8% | 78.4% |
-| System.Text.Json | 218 bytes | -395.4% | Reference |
+| **BitPack** | **17 bytes** | **55.3%** | **89.7%** |
+| MemoryPack | 48 bytes | -26.3% | 70.9% |
+| MessagePack | 38 bytes | Reference | 77.0% |
+| protobuf-net | 50 bytes | -31.6% | 69.7% |
+| System.Text.Json | 165 bytes | -334.2% | Reference |
 
 #### Execution Speed & Allocations
 *BenchmarkDotNet v0.13.12, .NET 10.0 (X64 RyuJIT AVX2)*
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Serialize_Simple_BitPack** | **38.55 ns** | **38.55 ns** | **0 B** |
-| **Deserialize_Simple_BitPack** | **10.01 ns** | **9.84 ns** | **0 B** |
-| Serialize_MemoryPack | 14.64 ns | 14.36 ns | 312 B |
-| Deserialize_MemoryPack | 0.21 ns | 0.21 ns | 0 B |
-| Serialize_MessagePack | 50.20 ns | 49.96 ns | 312 B |
-| Deserialize_MessagePack | 61.82 ns | 61.82 ns | 0 B |
-| Serialize_ProtoBuf | 150.85 ns | 151.09 ns | 64 B |
-| Deserialize_ProtoBuf | 152.80 ns | 152.85 ns | 88 B |
-| Serialize_SystemTextJson_Context | 246.02 ns | 246.00 ns | 512 B |
-| Deserialize_SystemTextJson_Context | 409.15 ns | 409.01 ns | 64 B |
+| **Serialize_Simple_BitPack** | **21.41 ns** | **21.21 ns** | **0 B** |
+| **Deserialize_Simple_BitPack** | **10.47 ns** | **10.22 ns** | **0 B** |
+| Serialize_MemoryPack | 17.98 ns | 17.70 ns | 312 B |
+| Deserialize_MemoryPack\* | 0.22 ns | 0.22 ns | 0 B |
+| Serialize_MessagePack | 61.48 ns | 61.39 ns | 312 B |
+| Deserialize_MessagePack | 63.45 ns | 63.48 ns | 0 B |
+| Serialize_ProtoBuf | 162.50 ns | 161.96 ns | 64 B |
+| Deserialize_ProtoBuf | 160.40 ns | 159.94 ns | 88 B |
+| Serialize_SystemTextJson_Context | 268.62 ns | 268.11 ns | 512 B |
+| Deserialize_SystemTextJson_Context | 436.31 ns | 435.55 ns | 64 B |
+
+*\*MemoryPack's `Deserialize_Simple` result of 0.22 ns is an artifact of JIT constant folding — the pre-serialized buffer holds a known value (789) and .NET 10's JIT eliminates the entire deserialization, leaving only empty method call overhead. This is not a meaningful performance measurement.*
 
 ---
 
@@ -74,27 +76,27 @@ The following benchmarks compare serialization and deserialization of two packet
 #### Wire Payload Sizes
 | Serializer | Wire Size (Bytes) | Bandwidth Saved vs MessagePack | Bandwidth Saved vs JSON |
 | :--- | :---: | :---: | :---: |
-| **BitPack** | **61 bytes** | **47.9%** | **89.5%** |
-| MemoryPack | 108 bytes | 7.7% | 81.4% |
-| MessagePack | 117 bytes | Reference | 79.8% |
-| protobuf-net | 120 bytes | -2.5% | 79.3% |
-| System.Text.Json | 581 bytes | -396.6% | Reference |
+| **BitPack** | **68 bytes** | **40.9%** | **83.2%** |
+| MemoryPack | 139 bytes | -20.9% | 65.7% |
+| MessagePack | 115 bytes | Reference | 71.6% |
+| protobuf-net | 138 bytes | -20.0% | 65.9% |
+| System.Text.Json | 405 bytes | -252.2% | Reference |
 
 #### Execution Speed & Allocations
 *BenchmarkDotNet v0.13.12, .NET 10.0 (X64 RyuJIT AVX2)*
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Serialize_Complex_BitPack** | **127.54 ns** | **127.44 ns** | **0 B** |
-| **Deserialize_Complex_BitPack** | **73.89 ns** | **73.55 ns** | **104 B** |
-| Serialize_MemoryPack | 42.82 ns | 42.65 ns | 312 B |
-| Deserialize_MemoryPack | 38.44 ns | 38.47 ns | 104 B |
-| Serialize_MessagePack | 119.16 ns | 119.32 ns | 312 B |
-| Deserialize_MessagePack | 177.00 ns | 176.58 ns | 104 B |
-| Serialize_ProtoBuf | 334.56 ns | 333.93 ns | 64 B |
-| Deserialize_Complex_ProtoBuf | 386.89 ns | 386.72 ns | 192 B |
-| Serialize_SystemTextJson_Context | 843.58 ns | 842.44 ns | 5016 B |
-| Deserialize_SystemTextJson_Context | 1164.12 ns | 1161.32 ns | 792 B |
+| **Serialize_Complex_BitPack** | **98.92 ns** | **98.62 ns** | **0 B** |
+| **Deserialize_Complex_BitPack** | **78.87 ns** | **78.92 ns** | **104 B** |
+| Serialize_MemoryPack | 51.53 ns | 51.60 ns | 312 B |
+| Deserialize_MemoryPack | 40.85 ns | 40.89 ns | 104 B |
+| Serialize_MessagePack | 138.57 ns | 138.43 ns | 312 B |
+| Deserialize_MessagePack | 189.13 ns | 189.07 ns | 104 B |
+| Serialize_ProtoBuf | 340.04 ns | 340.12 ns | 64 B |
+| Deserialize_Complex_ProtoBuf | 413.67 ns | 414.00 ns | 192 B |
+| Serialize_SystemTextJson_Context | 1027.55 ns | 1033.71 ns | 5016 B |
+| Deserialize_SystemTextJson_Context | 1238.11 ns | 1237.25 ns | 792 B |
 
 *Note on allocations:* The 104 bytes allocated during `Deserialize_Complex_BitPack` represent the two deserialized `string` objects themselves (`"Alex"` and `"Multiplayer Engine Pilot"`). BitPack's deserializer internals perform 0 garbage/helper allocations.
 
@@ -290,6 +292,87 @@ BitPack enforces strict compile-time checks to prevent unoptimized layouts or in
 *   **Error BP0001**: Raised when a property type is not packable (lacks BitPacket attribute, does not implement custom serialization hooks, or is dynamic/object), or when a property's `SinceVersion` exceeds its parent's version. Also raised when a property target lacks a getter accessor, or lacks a setter/init accessor while not matching any constructor parameters (preventing successful serialization/deserialization).
 *   **Warning BP0002**: Raised when a primitive integer or string does not specify optimization attributes (such as Range or MaxLength), indicating that full type storage (unquantized) will be used as a fallback.
 
+## Annotations and Runtime Safety
+
+### Why Annotations Matter
+
+BitPack's bit-width optimization is driven entirely by compile-time attributes. Without them, every property falls back to its full C# type width (32 bits for `int`, 64 bits for `long`, etc.):
+
+| Attribute | Effect on wire size |
+| :--- | :--- |
+| `[Range(0, 1000)]` | Stores the value offset in exactly ⌈log₂(1001)⌉ = 10 bits instead of 32 |
+| `[MaxLength(16)]` | Allocates only ⌈log₂(16×4)⌉ = 6 bits for the string length header |
+| `[Precision(2)]` (with `[Range]`) | Quantizes a `float`/`double` into a fixed-point integer needing only range bits |
+
+**Enums are detected automatically.** BitPack calculates the minimum bit-width from the largest declared enum field value. To override this (e.g., to reserve headroom for future values), apply `[Range]` directly on the enum property:
+
+```csharp
+[BitPacket]
+public partial record GamePacket
+{
+    // Auto-detected: max field is 2 → 2 bits on the wire
+    public GameState State { get; set; }
+
+    // Override: reserve up to 15 → 4 bits on the wire
+    [Range(0, 15)]
+    public GameState FutureProofState { get; set; }
+}
+
+public enum GameState { Idle = 0, Running = 1, Paused = 2 }
+```
+
+### Runtime Mismatch and Overflow Behaviour
+
+BitPack trusts the annotations at face value. Assigning values that exceed declared constraints throws an `ArgumentOutOfRangeException` at `Serialize()` time for **all** constrained types — strings, integers, floats, and enums:
+
+**Strings — exceeds `[MaxLength]` or `[StringLength]`:**
+```csharp
+[BitPacket]
+public partial record PlayerPacket
+{
+    [MaxLength(16)]
+    public string Name { get; set; }
+}
+
+// Throws ArgumentOutOfRangeException at Serialize():
+new PlayerPacket { Name = "This string is way longer than sixteen characters" };
+```
+
+**Integers — outside `[Range]`:**
+```csharp
+[BitPacket]
+public partial record PlayerPacket
+{
+    [Range(0, 100)]
+    public int Health { get; set; }
+}
+
+// Throws ArgumentOutOfRangeException at Serialize():
+var packet = new PlayerPacket { Health = 999 };
+packet.Serialize(writer);
+```
+
+**Enums — auto-detected or `[Range]`-declared:**
+```csharp
+[BitPacket]
+public partial record GamePacket
+{
+    // Auto-detected max: Paused=2 → throws for values > 2
+    public GameState State { get; set; }
+
+    // Explicit [Range]: throws for values outside [0, 15]
+    [Range(0, 15)]
+    public GameState FutureProofState { get; set; }
+}
+
+// Throws ArgumentOutOfRangeException at Serialize():
+new GamePacket { State = (GameState)99 };
+```
+
+**Floats/doubles with `[Precision]`** — values outside the `[Range]` throw identically.
+
+BitPack cannot validate runtime values at compile time. Guard your setters or validate inputs before constructing packets to stay within declared bounds.
+
 ---
 
 ## Architectural Guidance
@@ -312,3 +395,57 @@ BitPack is engineered solely for structural packet size optimization (fitting fi
     [C# Objects] ──> BitPack (Serialize) ──> [Raw Bytes] ──> Encrypt/Compress ──> [UDP/TCP Socket]
     ```
     If encryption or compression are required, they should be applied to the resulting byte array (e.g. from `BitWriter.ToArray()` or `BitWriter.Buffer`) rather than attempting to perform them within the serializer itself.
+
+### 4. Performance Design
+
+BitPack's performance is achieved through several deliberate design choices:
+
+*   **Tiered bit-width writes**: The `WriteLong`/`ReadLong` core methods branch on the total bit span (`bitOffset + bitCount`), dispatching to byte (≤8 bits), `ushort` (≤16), `uint` (≤32), or `ulong` (≤64) read-modify-write paths. This avoids full 64-bit memory traffic for narrow values like booleans or range-constrained integers.
+*   **Zero-heap allocations**: All internal buffers for string encoding use `stackalloc` for small payloads and `ArrayPool<byte>.Shared` for large ones. The `ReadDecimal` method uses the `decimal(int,int,int,bool,byte)` constructor to avoid allocating `new int[4]`.
+*   **Span-based APIs throughout**: `WriteBytes` and `ReadBytes` operate on `ReadOnlySpan<byte>` / `Span<byte>`, enabling the JIT to eliminate bounds checks and enabling vectorized copy for byte-aligned writes.
+*   **Compile-time code generation**: The Roslyn incremental source generator emits specialized serialization logic per type, avoiding any runtime reflection or dynamic code generation.
+
+---
+
+## Contributing
+
+Contributions are welcome. Please open an issue first to discuss what you'd like to change.
+
+### Prerequisites
+
+*   [.NET SDK 10.0](https://dotnet.microsoft.com/download) (or later)
+
+### Build
+
+```bash
+dotnet build BitPack.slnx
+```
+
+### Run Tests
+
+```bash
+dotnet test BitPack.Tests/BitPack.Tests.csproj
+```
+
+### Run Benchmarks
+
+```bash
+dotnet run -c Release -f net10.0 --project BitPack.Benchmarks/BitPack.Benchmarks.csproj
+```
+
+Benchmarks compare BitPack against MemoryPack, MessagePack, protobuf-net, and System.Text.Json using BenchmarkDotNet. Results are written to `BenchmarkDotNet.Artifacts/results/`.
+
+### Project Structure
+
+| Directory | Description |
+| :--- | :--- |
+| `BitPack/` | Core library — `BitWriter`, `BitReader`, attributes, and the `IBitSerializable` interface |
+| `BitPack.Generator/` | Roslyn incremental source generator — emits `Serialize`, `Deserialize`, and `Read` methods at compile time |
+| `BitPack.Tests/` | xUnit test suite covering all serialization scenarios |
+| `BitPack.Benchmarks/` | BenchmarkDotNet harness comparing BitPack against other serializers |
+
+### Code Style
+
+*   All public API methods are annotated `[MethodImpl(MethodImplOptions.AggressiveInlining)]`.
+*   Internal hot-path methods use `Unsafe` intrinsics for unaligned memory access.
+*   The library targets `netstandard2.1` for broad compatibility while the generator targets `netstandard2.0`.
