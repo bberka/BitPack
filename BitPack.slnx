@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="BitPack/BitPack.csproj" />
+  <Project Path="BitPack.Generator/BitPack.Generator.csproj" />
+  <Project Path="BitPack.Benchmarks/BitPack.Benchmarks.csproj" />
+  <Project Path="BitPack.Tests/BitPack.Tests.csproj" />
+</Solution>
