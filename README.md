@@ -1,8 +1,33 @@
 # BitPack: Bit-Level Serialization Class Library
 
+[![NuGet Version](https://img.shields.io/nuget/v/BitPack.svg?style=flat-square)](https://www.nuget.org/packages/BitPack/)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/bberka/BitPack/publish.yml?branch=master&style=flat-square)](https://github.com/bberka/BitPack/actions)
+[![License](https://img.shields.io/github/license/bberka/BitPack.svg?style=flat-square)](LICENSE)
+
 BitPack is a high-performance, native AOT-compatible, zero-allocation C# bit-level serialization class library. It is designed specifically for multiplayer games and high-throughput network architectures where bandwidth footprint and execution overhead must be kept to an absolute minimum.
 
 By generating serialization logic at compile time using Roslyn Incremental Source Generators, BitPack reads and writes variables directly to a bitstream, allowing properties to occupy fractional byte lengths on the wire (e.g., storing a rotation angle in exactly 9 bits instead of a 32-bit integer).
+
+---
+
+## Installation
+
+Install the `BitPack` class library package via the NuGet Package Manager or .NET CLI:
+
+### .NET CLI
+```bash
+dotnet add package BitPack
+```
+
+### Package Manager
+```powershell
+Install-Package BitPack
+```
+
+### PackageReference
+```xml
+<PackageReference Include="BitPack" Version="0.1.0" />
+```
 
 ---
 
