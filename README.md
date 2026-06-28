@@ -6,6 +6,55 @@ By generating serialization logic at compile time using Roslyn Incremental Sourc
 
 ---
 
+## Benchmark Results
+
+The following benchmarks compare the serialization and deserialization of a packet (`BenchmarkPacket`) containing an angle (`AimAngle`), moving state (`IsMoving`), ship class (`ShipClass`), and pilot name (`PilotName`):
+
+```csharp
+[BitPacket]
+public partial record struct BenchmarkPacket
+{
+    [Range(0, 360)] public int AimAngle { get; set; }
+    public bool IsMoving { get; set; }
+    [Range(0, 3)] public byte ShipClass { get; set; }
+    [MaxLength(16)] public string PilotName { get; set; }
+}
+```
+
+### Wire Payload Sizes
+
+| Serializer | Wire Size (Bytes) | Bandwidth Saved vs MessagePack | Bandwidth Saved vs JSON |
+| :--- | :---: | :---: | :---: |
+| **BitPack** | **7 bytes** | **36.3%** | **89.2%** |
+| MemoryPack | 10 bytes | 9.0% | 84.6% |
+| MessagePack | 11 bytes | Reference | 83.0% |
+| protobuf-net | 15 bytes | -36.3% | 76.9% |
+| Nerdbank.MessagePack | 49 bytes | -345.4% | 24.6% |
+| System.Text.Json (AOT) | 65 bytes | -490.9% | Reference |
+
+### Execution Speed and Allocations
+
+*BenchmarkDotNet v0.13.12, .NET 10.0 (X64 RyuJIT AVX2)*
+
+| Method | Mean Speed | Median Speed | Managed Allocated Memory |
+| :--- | :---: | :---: | :---: |
+| **Serialize_BitPack** | **33.00 ns** | **32.76 ns** | **0 B** |
+| **Deserialize_BitPack** | **44.86 ns** | **44.90 ns** | **32 B** |
+| Serialize_MemoryPack | 32.42 ns | 31.54 ns | 48 B |
+| Deserialize_MemoryPack | 18.81 ns | 18.81 ns | 32 B |
+| Serialize_MessagePack | 35.35 ns | 35.35 ns | 40 B |
+| Deserialize_MessagePack | 58.58 ns | 58.60 ns | 72 B |
+| Serialize_ProtoBuf | 72.00 ns | 72.04 ns | 64 B |
+| Deserialize_ProtoBuf | 102.64 ns | 102.97 ns | 120 B |
+| Serialize_SystemTextJson_Context | 101.83 ns | 99.50 ns | 512 B |
+| Deserialize_SystemTextJson_Context | 154.85 ns | 154.63 ns | 64 B |
+| Serialize_SystemTextJson_Dynamic | 131.94 ns | 131.36 ns | 544 B |
+| Deserialize_SystemTextJson_Dynamic | 155.75 ns | 156.41 ns | 64 B |
+
+Note on allocations: The 32 bytes allocated during Deserialize_BitPack represents the deserialized PilotName string object itself ("Alex"). BitPack's deserializer internals perform 0 helper allocations by utilizing stack-allocated spans.
+
+---
+
 ## Supported Types Reference
 
 BitPack supports a dedicated subset of types designed for predictable sizing and serialization:
