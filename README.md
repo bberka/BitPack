@@ -262,7 +262,51 @@ public partial record NetworkHeader
 
 ---
 
-## Protocol Version Gating
+## Serialization Wire Format
+
+BitPack writes the entire bitstream as a dense, unbroken sequence of bits — there are **no delimiters, field names, separators, or type metadata** between properties. The wire is self-describing only to code that was compiled with the exact same `[BitPacket]` layout.
+
+### Property Order
+
+Properties (and `[DataMember]`-promoted fields) are serialized **in declaration order** as they appear in the source file:
+
+```csharp
+[BitPacket]
+public partial record PlayerInput
+{
+    [Range(0, 360)] public int AimAngle { get; set; }   // Offset 0 bits
+    public bool IsMoving { get; set; }                    // Offset 9 bits
+    [MaxLength(16)] public string Name { get; set; }     // Offset 10 bits
+}
+```
+
+The wire layout for a single packet is:
+
+```
+[bits 0–8: AimAngle (9 bits)] [bit 9: IsMoving (1 bit)] [bits 10+: Name (6-bit length header + UTF-8 bytes)]
+```
+
+If the packet has `[BitPacket(Version = N)]` with `N > 1`, a 4-bit version header is prepended at offset 0 before all properties.
+
+The deserializer reads properties in the same sequential order, consuming exactly the same number of bits per property. Any mismatch in order, type, or bit-width between writer and reader produces **silent data corruption** — not an error message.
+
+### How Bit-Widths Are Determined
+
+| Property type | Wire bits (constrained) | Wire bits (unconstrained) |
+| :--- | :--- | :--- |
+| `bool` | 1 bit (always) | — |
+| `[Range(min, max)] int` | `⌈log₂(max − min + 1)⌉` | 32 bits |
+| `[Range(min, max)][Precision(d)] float` | `⌈log₂((max − min) × 10ᵈ + 1)⌉` | 32 bits (IEEE 754) |
+| `[MaxLength(n)] string` | `⌈log₂(n × 4)⌉` length header + UTF-8 bytes | `⌈log₂(256 × 4)⌉` = 10-bit header |
+| `decimal` | 128 bits (always) | — |
+| `enum` | `⌈log₂(max value + 1)⌉` or `[Range]` override | — |
+| `[BitPacket]` nested type | Sum of its own property bits | — |
+
+---
+
+## Backward Compatibility
+
+### Protocol Version Gating
 
 Use `[SinceVersion]` to add new fields to live protocols without breaking backwards compatibility:
 
@@ -282,6 +326,117 @@ public partial record PlayerInput
 
 1.  **V2 Client to V2 Server**: Version 2 header is sent. Both `AimAngle` and `ExtraBoost` are read and written.
 2.  **V1 Client to V2 Server**: Version 1 header is sent. The server reads `AimAngle`, sees `packetVersion (1) < SinceVersion (2)`, skips reading `ExtraBoost`, and defaults it to `false`. The bitstream remains aligned.
+
+### Compatibility Pitfalls
+
+BitPack's dense bitstream layout means that **any** change to the property sequence, count, types, or constraint attributes can silently break compatibility. Since there are no field identifiers or type tags on the wire, mismatches produce garbled data rather than clean errors.
+
+#### Changing Property Order **BREAKS** Compatibility
+
+Properties are serialized in declaration order. Reordering them in source code changes the wire layout:
+
+```csharp
+// Version A — compatible stream
+[BitPacket]
+public partial record PlayerInput
+{
+    public bool IsMoving { get; set; }    // bit 0
+    public int AimAngle { get; set; }      // bits 1–9
+}
+
+// Version B — INCOMPATIBLE (reordered)
+[BitPacket]
+public partial record PlayerInput
+{
+    public int AimAngle { get; set; }      // NOW bit 0 — misaligned!
+    public bool IsMoving { get; set; }    // NOW bit 9 — reads garbage
+}
+```
+
+A V2 client sending in the new order to a V1 server will interleave `AimAngle` bits where `IsMoving` was expected, corrupting every subsequent field. **Always append new properties to the end of the class.**
+
+#### Adding New Properties
+
+| Action | Result |
+| :--- | :--- |
+| Add at end + `[SinceVersion]` | New clients write the field; old clients skip it on read. Safe. |
+| Add at end without `[SinceVersion]` | Old clients won't know the field exists — deserialization reads incorrect bits from the new field's slot. Unsafe. |
+| Add in the middle | Same as reordering — breaks alignment for all subsequent fields. Unsafe. |
+
+#### Removing Properties
+
+Removing a property creates a "hole" in the bitstream. Old clients still encode bits for the removed field; the new server or client will read those bits as the next property, shifting all subsequent reads:
+
+```csharp
+// Version A
+[BitPacket(Version = 2)]
+public partial record PlayerInput
+{
+    [SinceVersion(2)]
+    public bool SprintEnabled { get; set; } // bits 0–0
+    public int AmmoCount { get; set; }       // bits 1–7
+}
+// Stream: [SprintEnabled:1b][AmmoCount:7b]
+
+// Version B — REMOVED SprintEnabled
+[BitPacket(Version = 2)]
+public partial record PlayerInput
+{
+    public int AmmoCount { get; set; }       // NOW bits 0–6 — misaligned!
+}
+// But old client writes: [SprintEnabled:1b][AmmoCount:7b]
+// New server reads AmmoCount from bits 0–6, losing SprintEnabled bit + 1 AmmoCount bit
+```
+
+**Instead of removing a field, gate it behind `[SinceVersion]` on a bumped packet version and leave its declaration in place.** This ensures old clients produce a stream that the new server can still parse correctly.
+
+#### Renaming Properties — SAFE
+
+Renaming a property has no effect on the wire format. BitPack serializes by **declaration order**, not by member name.
+
+#### Changing Type or Constraints **BREAKS** Compatibility
+
+| Change | Effect |
+| :--- | :--- |
+| `[Range(0, 100)]` → `[Range(0, 1000)]` | Bit-width changes (7 → 10 bits). Wire layout shifts. |
+| `[MaxLength(16)]` → `[MaxLength(32)]` | Length header bit-width changes. All subsequent fields shift. |
+| `int` → `long` | 32 → 64 bits (or constrained bit-width changes). Shift. |
+| `float` → `[Range][Precision] float` | 32 bits → range bits. Shift. |
+
+#### Compatibility Decision Table
+
+| Change | Safe? | Mitigation |
+| :--- | :--- | :--- |
+| Append new property at end | If `[SinceVersion]` and version bumped | Gate behind version |
+| Append new property at end (no version) | No | Bump packet version first |
+| Reorder properties | **No** | Never reorder |
+| Delete a property | **No** | Gate behind `[SinceVersion]` instead |
+| Rename a property | **Yes** | No action needed |
+| Change `[Range]` on existing property | **No** | Fork to a new packet type, or bump version and add a new constrained property at end while deprecating the old one |
+| Change `[MaxLength]` on existing property | **No** | Same as range change |
+| Change property type (`int` → `long`) | **No** | Add new property at end; keep old as unused |
+
+#### Detection at Runtime
+
+BitPack cannot detect wire format mismatches at runtime (there is no schema negotiation). The recommended approach is:
+
+1. **Protocol negotiation**: Exchange a version handshake at connection time (independent of BitPack). The server rejects clients with incompatible packet versions.
+2. **Packet type IDs**: Prefix each packet with a small integer identifying its schema version, checked before deserialization.
+3. **Integration tests**: Serialize known payloads to golden byte arrays in CI. Any change to the wire format breaks the golden test, alerting the developer.
+
+```csharp
+// Golden-file test pattern
+[Fact]
+public void PlayerInput_WireFormat_IsStable()
+{
+    var packet = new PlayerInput { AimAngle = 90, IsMoving = true };
+    var writer = new BitWriter(new byte[16]);
+    packet.Serialize(writer);
+
+    var golden = Convert.ToHexString(writer.ToArray());
+    Assert.Equal("5A02", golden); // Fails if wire format ever changes
+}
+```
 
 ---
 
