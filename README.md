@@ -176,6 +176,10 @@ Use the following attributes to configure bit constraints, quantization, version
     *   **Targets**: Properties or fields in a type marked `[BitPacket]`.
     *   **Description**: Restricts serialization of the member to streams matching or exceeding the specified version index, ensuring backward compatibility.
 
+*   `[BitFieldKey(int key)]`
+    *   **Targets**: Properties or fields in a type marked `[BitPacket]`, including serializable members inherited from a base class.
+    *   **Description**: Assigns a stable wire-layout key. When any serializable member in a packet uses `[BitFieldKey]`, every serializable member in that packet must use it. Members are serialized by ascending key instead of declaration order. Keys must be zero or greater and unique within the full inherited packet layout.
+
 ### 2. Standard C# Data Annotation Attributes
 
 *   `[Range(double minimum, double maximum)]`
@@ -300,7 +304,7 @@ BitPack writes the entire bitstream as a dense, unbroken sequence of bits — th
 
 ### Property Order
 
-Properties (and `[DataMember]`-promoted fields) are serialized **in declaration order** as they appear in the source file:
+Properties (and `[DataMember]`-promoted fields) are serialized **in declaration order** as they appear in the source file unless `[BitFieldKey]` is used:
 
 ```csharp
 [BitPacket]
@@ -321,6 +325,23 @@ The wire layout for a single packet is:
 If the packet has `[BitPacket(Version = N)]` with `N > 1`, a 4-bit version header is prepended at offset 0 before all properties.
 
 The deserializer reads properties in the same sequential order, consuming exactly the same number of bits per property. Any mismatch in order, type, or bit-width between writer and reader produces **silent data corruption** — not an error message.
+
+To make refactors safer, use `[BitFieldKey]` on every serializable member in a packet. The generator then writes fields in ascending key order instead of source declaration order:
+
+```csharp
+[BitPacket]
+public partial record PlayerInput
+{
+    [BitFieldKey(1)]
+    public bool IsMoving { get; set; }
+
+    [BitFieldKey(0)]
+    [Range(0, 360)]
+    public int AimAngle { get; set; }
+}
+```
+
+This still writes `AimAngle` first, then `IsMoving`, even though the source declarations are reversed. If one member has `[BitFieldKey]`, all serializable members in that packet must have one. Duplicate or negative keys are generator errors.
 
 ### How Bit-Widths Are Determined
 
@@ -365,7 +386,7 @@ BitPack's dense bitstream layout means that **any** change to the property seque
 
 #### Changing Property Order **BREAKS** Compatibility
 
-Properties are serialized in declaration order. Reordering them in source code changes the wire layout:
+Properties are serialized in declaration order unless `[BitFieldKey]` is used. Reordering unkeyed properties in source code changes the wire layout:
 
 ```csharp
 // Version A — compatible stream
@@ -385,7 +406,7 @@ public partial record PlayerInput
 }
 ```
 
-A V2 client sending in the new order to a V1 server will interleave `AimAngle` bits where `IsMoving` was expected, corrupting every subsequent field. **Always append new properties to the end of the class.**
+A V2 client sending in the new order to a V1 server will interleave `AimAngle` bits where `IsMoving` was expected, corrupting every subsequent field. For unkeyed packets, **always append new properties to the end of the class**. For keyed packets, keep existing keys stable and assign new fields unused keys.
 
 #### Adding New Properties
 
@@ -394,6 +415,7 @@ A V2 client sending in the new order to a V1 server will interleave `AimAngle` b
 | Add at end + `[SinceVersion]` | New clients write the field; old clients skip it on read. Safe. |
 | Add at end without `[SinceVersion]` | Old clients won't know the field exists — deserialization reads incorrect bits from the new field's slot. Unsafe. |
 | Add in the middle | Same as reordering — breaks alignment for all subsequent fields. Unsafe. |
+| Add with a new `[BitFieldKey]` but no `[SinceVersion]` | Source order is stable, but old clients still do not know the field exists. Unsafe. |
 
 #### Removing Properties
 
@@ -441,9 +463,11 @@ Renaming a property has no effect on the wire format. BitPack serializes by **de
 | :--- | :--- | :--- |
 | Append new property at end | If `[SinceVersion]` and version bumped | Gate behind version |
 | Append new property at end (no version) | No | Bump packet version first |
-| Reorder properties | **No** | Never reorder |
+| Reorder unkeyed properties | **No** | Never reorder, or migrate to `[BitFieldKey]` with golden-file tests |
+| Reorder keyed properties in source | Yes | Keep existing `[BitFieldKey]` values unchanged |
 | Delete a property | **No** | Gate behind `[SinceVersion]` instead |
 | Rename a property | **Yes** | No action needed |
+| Change a `[BitFieldKey]` value | **No** | Treat as a wire-layout change |
 | Change `[Range]` on existing property | **No** | Fork to a new packet type, or bump version and add a new constrained property at end while deprecating the old one |
 | Change `[MaxLength]` on existing property | **No** | Same as range change |
 | Change property type (`int` → `long`) | **No** | Add new property at end; keep old as unused |
@@ -478,6 +502,7 @@ BitPack enforces strict compile-time checks to prevent unoptimized layouts or in
 
 *   **Error BP0001**: Raised when a property type is not packable (lacks BitPacket attribute, does not implement custom serialization hooks, or is dynamic/object), or when a property's `SinceVersion` exceeds its parent's version. Also raised when a property target lacks a getter accessor, or lacks a setter/init accessor while not matching any constructor parameters (preventing successful serialization/deserialization).
 *   **Warning BP0002**: Raised when a primitive integer or string does not specify optimization attributes (such as Range or MaxLength), indicating that full type storage (unquantized) will be used as a fallback.
+*   **Error BP0003**: Raised when `[BitFieldKey]` usage is invalid: mixed keyed and unkeyed serializable members, duplicate keys, or negative keys.
 
 ## Annotations and Runtime Safety
 
@@ -570,10 +595,38 @@ BitPack supports C# object initialization patterns:
 *   **Init-Only and Required Properties**: Properties marked `init` or `required` are initialized during object construction in the static `Read(BitReader)` factory.
 *   **Parameterized and Primary Constructors**: If a type defines a parameterized constructor (such as C# records with primary constructors), the generator matches the constructor parameter names to the serialization targets (case-insensitive). It parses the values from the bitstream first, instantiates the type using the matched constructor, and sets any remaining targets via object initializers.
 
-### 2. Character and String Encoding
+### 2. Inheritance and Shared Base Packets
+Concrete `[BitPacket]` classes include serializable members inherited from base classes. This lets you define common packet metadata once:
+
+```csharp
+public abstract class BaseGamePacket
+{
+    [BitFieldKey(0)]
+    [Range(0, 1_000_000)]
+    public int Tick { get; set; }
+
+    [BitFieldKey(1)]
+    public bool IsReliable { get; set; }
+}
+
+[BitPacket]
+public partial class PlayerInputPacket : BaseGamePacket
+{
+    [BitFieldKey(2)]
+    [Range(0, 360)]
+    public int AimAngle { get; set; }
+
+    [BitFieldKey(3)]
+    public bool IsMoving { get; set; }
+}
+```
+
+Base members are discovered before derived members, and keyed packets are serialized by ascending `[BitFieldKey]` across the full inherited layout. Do not mark abstract base classes with `[BitPacket]`; only concrete packet types should be packet targets.
+
+### 3. Character and String Encoding
 All string properties are serialized using UTF-8 encoding. This supports international characters and Unicode symbols. Span-based `stackalloc byte` blocks are used internally to prevent heap allocations during deserialization.
 
-### 3. Encryption and Compression Pipelines
+### 4. Encryption and Compression Pipelines
 BitPack is engineered solely for structural packet size optimization (fitting fields into precise bit configurations). 
 *   **Compression**: Generic compression algorithms (like Brotli, Deflate, or Gzip) operate on byte patterns. Trying to compress individual bits during serialization is counterproductive.
 *   **Encryption**: Symmetric encryption (like AES-GCM or ChaCha20) must be applied to the completed byte array.
@@ -583,7 +636,7 @@ BitPack is engineered solely for structural packet size optimization (fitting fi
     ```
     If encryption or compression are required, they should be applied to the resulting byte array (e.g. from `BitWriter.ToArray()` or `BitWriter.Buffer`) rather than attempting to perform them within the serializer itself.
 
-### 4. Performance Design
+### 5. Performance Design
 
 BitPack's performance is achieved through several deliberate design choices:
 

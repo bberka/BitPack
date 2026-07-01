@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Runtime.Serialization;
@@ -80,6 +81,27 @@ public partial record TestGeneratedApiPacket
     public bool Flag { get; set; }
     [MaxLength(4)] public string Name { get; set; } = "";
     public TestGameState State { get; set; }
+}
+
+public abstract class TestBaseGamePacket
+{
+    [BitFieldKey(0)] [Range(0, 1000)] public int Tick { get; set; }
+    [BitFieldKey(1)] public bool IsReliable { get; set; }
+}
+
+[BitPacket]
+public partial class TestMoveGamePacket : TestBaseGamePacket
+{
+    [BitFieldKey(2)] [Range(-100, 100)] public int DeltaX { get; set; }
+    [BitFieldKey(3)] public bool IsJumping { get; set; }
+}
+
+[BitPacket]
+public partial class TestKeyedPacket
+{
+    [BitFieldKey(2)] public bool Last { get; set; }
+    [BitFieldKey(0)] [Range(0, 10)] public int First { get; set; }
+    [BitFieldKey(1)] public bool Middle { get; set; }
 }
 
 [BitPacket(2)]
@@ -290,8 +312,8 @@ public class SerializationTests
         Assert.Equal(18, TestGeneratedApiPacket.MaxBytes);
         Assert.NotEqual(0u, TestGeneratedApiPacket.LayoutHash);
         Assert.Contains("type=BitPack.Tests.TestGeneratedApiPacket", TestGeneratedApiPacket.LayoutManifest);
-        Assert.Contains("field=Value;type=int;since=1;bits=7", TestGeneratedApiPacket.LayoutManifest);
-        Assert.Contains("field=Name;type=string;since=1;bits=133", TestGeneratedApiPacket.LayoutManifest);
+        Assert.Contains("field=Value;type=int;declaringType=BitPack.Tests.TestGeneratedApiPacket;key=;since=1;bits=7", TestGeneratedApiPacket.LayoutManifest);
+        Assert.Contains("field=Name;type=string;declaringType=BitPack.Tests.TestGeneratedApiPacket;key=;since=1;bits=133", TestGeneratedApiPacket.LayoutManifest);
     }
 
     [Fact]
@@ -299,7 +321,46 @@ public class SerializationTests
     {
         Assert.Equal(-1, TestPlayerInput.MaxBits);
         Assert.Equal(-1, TestPlayerInput.MaxBytes);
-        Assert.Contains("field=HealthPercent;type=BitPack.Tests.Percent;since=1;bits=-1", TestPlayerInput.LayoutManifest);
+        Assert.Contains("field=HealthPercent;type=BitPack.Tests.Percent;declaringType=BitPack.Tests.TestPlayerInput;key=;since=1;bits=-1", TestPlayerInput.LayoutManifest);
+    }
+
+    [Fact]
+    public void GeneratedPacket_IncludesInheritedBaseProperties()
+    {
+        var packet = new TestMoveGamePacket
+        {
+            Tick = 123,
+            IsReliable = true,
+            DeltaX = -42,
+            IsJumping = true
+        };
+        var buffer = new byte[TestMoveGamePacket.MaxBytes];
+
+        packet.Serialize(new BitWriter(buffer));
+
+        var restored = TestMoveGamePacket.Read(new BitReader(buffer));
+        Assert.Equal(packet.Tick, restored.Tick);
+        Assert.Equal(packet.IsReliable, restored.IsReliable);
+        Assert.Equal(packet.DeltaX, restored.DeltaX);
+        Assert.Equal(packet.IsJumping, restored.IsJumping);
+        Assert.Contains("field=Tick;type=int;declaringType=BitPack.Tests.TestBaseGamePacket;key=0;since=1;bits=10", TestMoveGamePacket.LayoutManifest);
+        Assert.Contains("field=DeltaX;type=int;declaringType=BitPack.Tests.TestMoveGamePacket;key=2;since=1;bits=8", TestMoveGamePacket.LayoutManifest);
+    }
+
+    [Fact]
+    public void GeneratedPacket_BitFieldKeyControlsWireOrder()
+    {
+        var manifest = TestKeyedPacket.LayoutManifest;
+
+        var firstIndex = manifest.IndexOf("field=First;", StringComparison.Ordinal);
+        var middleIndex = manifest.IndexOf("field=Middle;", StringComparison.Ordinal);
+        var lastIndex = manifest.IndexOf("field=Last;", StringComparison.Ordinal);
+
+        Assert.True(firstIndex >= 0);
+        Assert.True(middleIndex > firstIndex);
+        Assert.True(lastIndex > middleIndex);
+        Assert.Equal(6, TestKeyedPacket.MaxBits);
+        Assert.Equal(1, TestKeyedPacket.MaxBytes);
     }
 
     [Fact]
@@ -514,6 +575,72 @@ public partial class BadPacketNoSetter
     }
 
     [Fact]
+    public void Generator_FailsWhenBitFieldKeysAreMixedWithUnkeyedMembers()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+[BitPacket]
+public partial class BadMixedKeysPacket
+{
+    [BitFieldKey(0)] public int A { get; set; }
+    public int B { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0003" && e.GetMessage().Contains("all serializable members"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenBitFieldKeysAreDuplicated()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+[BitPacket]
+public partial class BadDuplicateKeysPacket
+{
+    [BitFieldKey(0)] public int A { get; set; }
+    [BitFieldKey(0)] public int B { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0003" && e.GetMessage().Contains("key 0"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenBitFieldKeyIsNegative()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+[BitPacket]
+public partial class BadNegativeKeyPacket
+{
+    [BitFieldKey(-1)] public int A { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0003" && e.GetMessage().Contains("zero or greater"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenAbstractTypeIsMarkedAsPacket()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+[BitPacket]
+public abstract partial class BadAbstractPacket
+{
+    public int A { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0001" && e.GetMessage().Contains("Abstract types cannot"));
+    }
+
+    [Fact]
     public void GeneratedPacket_IntegerRangeOverflow_Throws()
     {
         var buffer = new byte[128];
@@ -712,5 +839,28 @@ public partial class BadPacketNoSetter
         var writer = new BitWriter(buffer);
         var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
         Assert.Contains("AutoDetectState", ex.ParamName);
+    }
+
+    private static List<Diagnostic> GetGeneratorErrors(string sourceCode)
+    {
+        var syntaxTree = CSharpSyntaxTree.ParseText(sourceCode);
+
+        var references = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+            .Select(a => MetadataReference.CreateFromFile(a.Location))
+            .ToArray();
+
+        var compilation = CSharpCompilation.Create(
+            "TestAssembly",
+            new[] { syntaxTree },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var generator = new PacketGenerator();
+        var driver = CSharpGeneratorDriver.Create(generator);
+
+        driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out var diagnostics);
+
+        return diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
     }
 }

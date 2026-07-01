@@ -44,3 +44,17 @@ public sealed class SinceVersionAttribute : Attribute
 
     public int Version { get; }
 }
+
+/// <summary>
+///     Assigns a stable wire-layout key to a serializable property or field.
+/// </summary>
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field)]
+public sealed class BitFieldKeyAttribute : Attribute
+{
+    public BitFieldKeyAttribute(int key)
+    {
+        Key = key;
+    }
+
+    public int Key { get; }
+}

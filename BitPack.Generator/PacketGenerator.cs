@@ -27,6 +27,14 @@ public class PacketGenerator : IIncrementalGenerator
         DiagnosticSeverity.Warning,
         true);
 
+    private static readonly DiagnosticDescriptor BitFieldKeyError = new(
+        "BP0003",
+        "Invalid BitFieldKey",
+        "Property or field '{0}' has invalid BitFieldKey: {1}",
+        "BitPackGenerator",
+        DiagnosticSeverity.Error,
+        true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var packetDeclarations = context.SyntaxProvider
@@ -61,6 +69,16 @@ public class PacketGenerator : IIncrementalGenerator
 
     private static void Execute(SourceProductionContext context, ITypeSymbol typeSymbol)
     {
+        if (typeSymbol.IsAbstract)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(
+                UnsupportedTypeError,
+                typeSymbol.Locations.FirstOrDefault(),
+                typeSymbol.Name,
+                "Abstract types cannot be marked with [BitPacket]. Mark only concrete packet types; inherited base members are included automatically."));
+            return;
+        }
+
         var namespaceName = typeSymbol.ContainingNamespace.IsGlobalNamespace
             ? string.Empty
             : typeSymbol.ContainingNamespace.ToDisplayString();
@@ -92,6 +110,7 @@ public class PacketGenerator : IIncrementalGenerator
 
         // Retrieve packet version
         var packetMaxVersion = GetPacketVersion(typeSymbol);
+        var hasVersionedTargets = targets.Any(t => GetPropertyVersion(t.Symbol) > 1);
         var maxBits = GetPacketMaxBits(typeSymbol, targets, packetMaxVersion);
         var maxBytes = maxBits < 0 ? -1 : (maxBits + 7) / 8;
         var layoutManifest = BuildLayoutManifest(typeSymbol, targets, packetMaxVersion, maxBits, maxBytes);
@@ -148,7 +167,11 @@ public class PacketGenerator : IIncrementalGenerator
         // Generate Deserialize method
         sourceBuilder.AppendLine("    public void Deserialize(BitReader reader)");
         sourceBuilder.AppendLine("    {");
-        if (packetMaxVersion > 1) sourceBuilder.AppendLine("        var packetVersion = reader.ReadInt(4);");
+        if (packetMaxVersion > 1)
+            sourceBuilder.AppendLine(hasVersionedTargets
+                ? "        var packetVersion = reader.ReadInt(4);"
+                : "        reader.ReadInt(4);");
+        else if (hasVersionedTargets) sourceBuilder.AppendLine("        var packetVersion = 1;");
 
         GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, false, packetMaxVersion, false);
         sourceBuilder.AppendLine("    }");
@@ -159,8 +182,10 @@ public class PacketGenerator : IIncrementalGenerator
         sourceBuilder.AppendLine($"    public static {typeName} Read(BitReader reader)");
         sourceBuilder.AppendLine("    {");
         if (packetMaxVersion > 1)
-            sourceBuilder.AppendLine("        var packetVersion = reader.ReadInt(4);");
-        else
+            sourceBuilder.AppendLine(hasVersionedTargets
+                ? "        var packetVersion = reader.ReadInt(4);"
+                : "        reader.ReadInt(4);");
+        else if (hasVersionedTargets)
             sourceBuilder.AppendLine("        var packetVersion = 1;");
 
         // 1. Declare read variables with defaults
@@ -250,9 +275,11 @@ public class PacketGenerator : IIncrementalGenerator
     {
         var targets = new List<SerializationTarget>();
 
-        foreach (var member in typeSymbol.GetMembers())
+        foreach (var currentType in GetSerializableTypeHierarchy(typeSymbol))
+        foreach (var member in currentType.GetMembers())
         {
             if (member.IsStatic) continue;
+            if (!IsAccessibleFromGeneratedType(member, typeSymbol)) continue;
 
             if (member is IPropertySymbol p)
             {
@@ -261,16 +288,54 @@ public class PacketGenerator : IIncrementalGenerator
                 var hasIgnore = HasIgnoreAttribute(p);
 
                 if ((isPublic && !hasIgnore) || (!isPublic && hasInclude))
-                    targets.Add(new SerializationTarget(p.Name, p.Type, p));
+                    AddOrReplaceTarget(targets, new SerializationTarget(p.Name, p.Type, p, GetBitFieldKey(p)));
             }
             else if (member is IFieldSymbol f && !f.IsImplicitlyDeclared)
             {
                 var hasInclude = HasIncludeAttribute(f);
-                if (hasInclude) targets.Add(new SerializationTarget(f.Name, f.Type, f));
+                if (hasInclude) AddOrReplaceTarget(targets, new SerializationTarget(f.Name, f.Type, f, GetBitFieldKey(f)));
             }
         }
 
-        return targets;
+        return targets.Any(t => t.FieldKey.HasValue)
+            ? targets.OrderBy(t => t.FieldKey.GetValueOrDefault()).ToList()
+            : targets;
+    }
+
+    private static IEnumerable<INamedTypeSymbol> GetSerializableTypeHierarchy(ITypeSymbol typeSymbol)
+    {
+        var stack = new Stack<INamedTypeSymbol>();
+        var current = typeSymbol as INamedTypeSymbol;
+        while (current != null && current.SpecialType != SpecialType.System_Object)
+        {
+            stack.Push(current);
+            current = current.BaseType;
+        }
+
+        return stack;
+    }
+
+    private static bool IsAccessibleFromGeneratedType(ISymbol member, ITypeSymbol generatedType)
+    {
+        if (SymbolEqualityComparer.Default.Equals(member.ContainingType, generatedType)) return true;
+
+        return member.DeclaredAccessibility != Accessibility.Private;
+    }
+
+    private static void AddOrReplaceTarget(List<SerializationTarget> targets, SerializationTarget target)
+    {
+        targets.RemoveAll(t => t.Name == target.Name);
+        targets.Add(target);
+    }
+
+    private static int? GetBitFieldKey(ISymbol symbol)
+    {
+        var attr = symbol.GetAttributes()
+            .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "BitPack.BitFieldKeyAttribute");
+        if (attr != null && attr.ConstructorArguments.Length > 0 && attr.ConstructorArguments[0].Value is int key)
+            return key;
+
+        return null;
     }
 
     private static void ValidateTargetSafety(SourceProductionContext context, ITypeSymbol typeSymbol,
@@ -310,6 +375,38 @@ public class PacketGenerator : IIncrementalGenerator
                             $"Property '{p.Name}' must have a setter or init accessor, or match a constructor parameter to be deserialized."));
                 }
             }
+
+        var hasAnyFieldKey = targets.Any(t => t.FieldKey.HasValue);
+        if (!hasAnyFieldKey) return;
+
+        foreach (var target in targets)
+        {
+            if (!target.FieldKey.HasValue)
+                context.ReportDiagnostic(Diagnostic.Create(
+                    BitFieldKeyError,
+                    target.Symbol.Locations.FirstOrDefault(),
+                    target.Name,
+                    "all serializable members must declare [BitFieldKey] when any member declares one."));
+            else if (target.FieldKey.Value < 0)
+                context.ReportDiagnostic(Diagnostic.Create(
+                    BitFieldKeyError,
+                    target.Symbol.Locations.FirstOrDefault(),
+                    target.Name,
+                    "keys must be zero or greater."));
+        }
+
+        foreach (var duplicateGroup in targets
+                     .Where(t => t.FieldKey.HasValue)
+                     .GroupBy(t => t.FieldKey!.Value)
+                     .Where(g => g.Count() > 1))
+        {
+            foreach (var target in duplicateGroup)
+                context.ReportDiagnostic(Diagnostic.Create(
+                    BitFieldKeyError,
+                    target.Symbol.Locations.FirstOrDefault(),
+                    target.Name,
+                    $"key {duplicateGroup.Key} is already used by another serializable member."));
+        }
     }
 
     private static IMethodSymbol? FindMatchingConstructor(INamedTypeSymbol? typeSymbol,
@@ -996,7 +1093,7 @@ public class PacketGenerator : IIncrementalGenerator
         {
             var targetBits = GetTargetMaxBits(target, new HashSet<string> { typeSymbol.ToDisplayString() });
             sb.AppendLine(
-                $"field={target.Name};type={target.Type.ToDisplayString()};since={GetPropertyVersion(target.Symbol)};bits={targetBits}");
+                $"field={target.Name};type={target.Type.ToDisplayString()};declaringType={target.Symbol.ContainingType.ToDisplayString()};key={target.FieldKey?.ToString() ?? ""};since={GetPropertyVersion(target.Symbol)};bits={targetBits}");
         }
 
         return sb.ToString();
@@ -1076,15 +1173,17 @@ public class PacketGenerator : IIncrementalGenerator
 
     private class SerializationTarget
     {
-        public SerializationTarget(string name, ITypeSymbol type, ISymbol symbol)
+        public SerializationTarget(string name, ITypeSymbol type, ISymbol symbol, int? fieldKey)
         {
             Name = name;
             Type = type;
             Symbol = symbol;
+            FieldKey = fieldKey;
         }
 
         public string Name { get; }
         public ITypeSymbol Type { get; }
         public ISymbol Symbol { get; }
+        public int? FieldKey { get; }
     }
 }
