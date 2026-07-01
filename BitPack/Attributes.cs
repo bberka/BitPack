@@ -58,3 +58,17 @@ public sealed class BitFieldKeyAttribute : Attribute
 
     public int Key { get; }
 }
+
+/// <summary>
+///     Requires an array property or field to contain exactly the specified number of elements on the wire.
+/// </summary>
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field)]
+public sealed class FixedCountAttribute : Attribute
+{
+    public FixedCountAttribute(int count)
+    {
+        Count = count;
+    }
+
+    public int Count { get; }
+}

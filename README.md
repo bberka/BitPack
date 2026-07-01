@@ -154,6 +154,7 @@ BitPack supports a dedicated subset of types designed for predictable sizing and
 | **Date & Time** | `DateTime` | 64 bits (UTC tick representation) |
 | **Value Objects** | User-defined `struct` | Supported via custom static `Read(BitReader)` and `Serialize(BitWriter)` hook detection |
 | **Nested Objects** | Types marked `[BitPacket]` | Recursively serialized inline |
+| **Bounded Arrays** | One-dimensional `T[]` with `[MaxLength]` or `[FixedCount]` | Compact length header for variable arrays, no header for fixed arrays |
 | **Interfaces** | Interfaces implementing `IBitSerializable` | Deserialized directly into pre-allocated concrete objects |
 
 ---
@@ -180,6 +181,10 @@ Use the following attributes to configure bit constraints, quantization, version
     *   **Targets**: Properties or fields in a type marked `[BitPacket]`, including serializable members inherited from a base class.
     *   **Description**: Assigns a stable wire-layout key. When any serializable member in a packet uses `[BitFieldKey]`, every serializable member in that packet must use it. Members are serialized by ascending key instead of declaration order. Keys must be zero or greater and unique within the full inherited packet layout.
 
+*   `[FixedCount(int count)]`
+    *   **Targets**: One-dimensional array properties or fields.
+    *   **Description**: Serializes exactly `count` array elements with no length header. The array must be non-null and must have exactly `count` elements at serialization time. Use this for fixed-size inputs, inventory slots, button masks, and other fixed packet shapes.
+
 ### 2. Standard C# Data Annotation Attributes
 
 *   `[Range(double minimum, double maximum)]`
@@ -189,6 +194,10 @@ Use the following attributes to configure bit constraints, quantization, version
 *   `[MaxLength(int length)]` or `[StringLength(int length)]`
     *   **Targets**: String properties/fields.
     *   **Description**: Dictates the maximum expected character length. BitPack uses this value to allocate the minimum size header required to encode the string length on the wire.
+
+*   `[MaxLength(int length)]`
+    *   **Targets**: One-dimensional array properties or fields.
+    *   **Description**: Dictates the maximum element count for variable-length arrays. BitPack writes a compact array length header followed by only the present elements.
 
 ### 3. Member Control Attributes
 
@@ -296,6 +305,28 @@ public partial record NetworkHeader
 }
 ```
 
+### 3. Bounded Arrays
+Arrays must be one-dimensional and bounded with either `[MaxLength]` or `[FixedCount]` so BitPack can calculate `MaxBits` and `MaxBytes` at compile time.
+
+```csharp
+[BitPacket]
+public partial record SnapshotBatch
+{
+    // Variable count: writes a compact length header, then 0..16 IDs.
+    [MaxLength(16)]
+    [Range(0, 1023)]
+    public int[] EntityIds { get; set; } = Array.Empty<int>();
+
+    // Fixed count: writes exactly 4 bools and no length header.
+    [FixedCount(4)]
+    public bool[] Buttons { get; set; } = Array.Empty<bool>();
+}
+```
+
+Variable arrays treat `null` as empty during serialization. Fixed arrays must be non-null and exactly the declared length. Array element types use the same attributes as scalar fields, so `[Range]`, `[Precision]`, enum range overrides, nested `[BitPacket]` types, and custom value objects apply to each element.
+
+Current limitations: jagged arrays, multidimensional arrays, `string[]`, interface arrays, and `List<T>` are not supported. Use nested packet types or custom value objects when you need richer repeated structures.
+
 ---
 
 ## Serialization Wire Format
@@ -354,6 +385,10 @@ This still writes `AimAngle` first, then `IsMoving`, even though the source decl
 | `decimal` | 128 bits (always) | — |
 | `enum` | `⌈log₂(max value + 1)⌉` or `[Range]` override | — |
 | `[BitPacket]` nested type | Sum of its own property bits | — |
+| `[MaxLength(n)] T[]` | `⌈log₂(n + 1)⌉` length header + present element bits | Unsupported without bounds |
+| `[FixedCount(n)] T[]` | `n × element bits` | Unsupported without bounds |
+
+For a variable bounded array like `[MaxLength(4)][Range(0, 31)] int[]`, BitPack writes a 3-bit array length header followed by 5 bits per present element. For a fixed array like `[FixedCount(4)] bool[]`, BitPack writes exactly 4 bits with no length header.
 
 ---
 
@@ -454,6 +489,8 @@ Renaming a property has no effect on the wire format. BitPack serializes by **de
 | :--- | :--- |
 | `[Range(0, 100)]` → `[Range(0, 1000)]` | Bit-width changes (7 → 10 bits). Wire layout shifts. |
 | `[MaxLength(16)]` → `[MaxLength(32)]` | Length header bit-width changes. All subsequent fields shift. |
+| `[MaxLength(4)] int[]` → `[MaxLength(8)] int[]` | Array length header and max payload size can change. |
+| `[FixedCount(4)] bool[]` → `[FixedCount(8)] bool[]` | Fixed payload width changes. |
 | `int` → `long` | 32 → 64 bits (or constrained bit-width changes). Shift. |
 | `float` → `[Range][Precision] float` | 32 bits → range bits. Shift. |
 
@@ -470,6 +507,7 @@ Renaming a property has no effect on the wire format. BitPack serializes by **de
 | Change a `[BitFieldKey]` value | **No** | Treat as a wire-layout change |
 | Change `[Range]` on existing property | **No** | Fork to a new packet type, or bump version and add a new constrained property at end while deprecating the old one |
 | Change `[MaxLength]` on existing property | **No** | Same as range change |
+| Change `[MaxLength]` or `[FixedCount]` on an array | **No** | Add a new version-gated array field and keep the old one |
 | Change property type (`int` → `long`) | **No** | Add new property at end; keep old as unused |
 
 #### Detection at Runtime
@@ -503,6 +541,7 @@ BitPack enforces strict compile-time checks to prevent unoptimized layouts or in
 *   **Error BP0001**: Raised when a property type is not packable (lacks BitPacket attribute, does not implement custom serialization hooks, or is dynamic/object), or when a property's `SinceVersion` exceeds its parent's version. Also raised when a property target lacks a getter accessor, or lacks a setter/init accessor while not matching any constructor parameters (preventing successful serialization/deserialization).
 *   **Warning BP0002**: Raised when a primitive integer or string does not specify optimization attributes (such as Range or MaxLength), indicating that full type storage (unquantized) will be used as a fallback.
 *   **Error BP0003**: Raised when `[BitFieldKey]` usage is invalid: mixed keyed and unkeyed serializable members, duplicate keys, or negative keys.
+*   **Error BP0004**: Raised when array bounds are invalid: missing `[MaxLength]`/`[FixedCount]`, both bounds specified, negative/zero fixed counts, jagged arrays, multidimensional arrays, `string[]`, or interface arrays.
 
 ## Annotations and Runtime Safety
 
@@ -548,6 +587,26 @@ public partial record PlayerPacket
 
 // Throws ArgumentOutOfRangeException at Serialize():
 new PlayerPacket { Name = "This string is way longer than sixteen characters" };
+```
+
+**Arrays — exceeds `[MaxLength]` or violates `[FixedCount]`:**
+```csharp
+[BitPacket]
+public partial record InputPacket
+{
+    [MaxLength(8)]
+    [Range(0, 1023)]
+    public int[] EntityIds { get; set; } = Array.Empty<int>();
+
+    [FixedCount(4)]
+    public bool[] Buttons { get; set; } = Array.Empty<bool>();
+}
+
+// Throws: EntityIds has 9 elements but max is 8.
+new InputPacket { EntityIds = new int[9], Buttons = new bool[4] }.Serialize(writer);
+
+// Throws: Buttons must contain exactly 4 elements.
+new InputPacket { EntityIds = Array.Empty<int>(), Buttons = new bool[2] }.Serialize(writer);
 ```
 
 **Integers — outside `[Range]`:**

@@ -35,6 +35,14 @@ public class PacketGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         true);
 
+    private static readonly DiagnosticDescriptor BoundedArrayError = new(
+        "BP0004",
+        "Invalid Bounded Array",
+        "Array property or field '{0}' has invalid bounds: {1}",
+        "BitPackGenerator",
+        DiagnosticSeverity.Error,
+        true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var packetDeclarations = context.SyntaxProvider
@@ -525,6 +533,12 @@ public class PacketGenerator : IIncrementalGenerator
     {
         var propType = target.Type;
 
+        if (propType is IArrayTypeSymbol arrayType)
+        {
+            GenerateArraySerialization(context, sb, target, arrayType, isWriting, targetVarName, skipValidation);
+            return;
+        }
+
         // Check for custom serialization or bit packet nested properties
         var isBitPacket = IsBitPacketType(propType);
         var hasCustom = ExposesCustomSerialization(propType, out var staticMethodName);
@@ -849,6 +863,176 @@ public class PacketGenerator : IIncrementalGenerator
         }
     }
 
+    private static void GenerateArraySerialization(SourceProductionContext context, StringBuilder sb,
+        SerializationTarget target, IArrayTypeSymbol arrayType, bool isWriting, string targetVarName,
+        bool skipValidation)
+    {
+        if (!TryGetArrayConfig(target.Symbol, arrayType, out var config, out var error))
+        {
+            if (isWriting && !skipValidation)
+                context.ReportDiagnostic(Diagnostic.Create(
+                    BoundedArrayError,
+                    target.Symbol.Locations.FirstOrDefault(),
+                    target.Name,
+                    error));
+
+            sb.AppendLine(
+                $"        // ERROR: Array property '{targetVarName}' of type '{arrayType.ToDisplayString()}' must be a supported bounded array.");
+            return;
+        }
+
+        var elementTypeName = arrayType.ElementType.ToDisplayString();
+        var elementTarget = new SerializationTarget($"{target.Name}Element", arrayType.ElementType, target.Symbol, null);
+
+        if (isWriting)
+        {
+            var valueVar = $"value_{SanitizeIdentifier(target.Name)}";
+            var indexVar = $"i_{SanitizeIdentifier(target.Name)}";
+            var elementVar = $"element_{SanitizeIdentifier(target.Name)}";
+            if (config.IsFixed)
+            {
+                sb.AppendLine(
+                    $"        if ({targetVarName} == null || {targetVarName}.Length != {config.Count}) throw new ArgumentOutOfRangeException(nameof({targetVarName}), {targetVarName}?.Length, \"Array length must be exactly {config.Count}.\");");
+                sb.AppendLine($"        for (var {indexVar} = 0; {indexVar} < {config.Count}; {indexVar}++)");
+                sb.AppendLine("        {");
+                sb.AppendLine($"        var {elementVar} = {targetVarName}[{indexVar}];");
+                GeneratePropertySerialization(context, sb, elementTarget, true, elementVar, skipValidation);
+                sb.AppendLine("        }");
+            }
+            else
+            {
+                sb.AppendLine($"        var {valueVar} = {targetVarName} ?? Array.Empty<{elementTypeName}>();");
+                sb.AppendLine(
+                    $"        if ({valueVar}.Length > {config.Count}) throw new ArgumentOutOfRangeException(nameof({targetVarName}), {valueVar}.Length, \"Array length must be less than or equal to {config.Count}.\");");
+                sb.AppendLine($"        writer.WriteInt({valueVar}.Length, {config.LengthBits});");
+                sb.AppendLine($"        for (var {indexVar} = 0; {indexVar} < {valueVar}.Length; {indexVar}++)");
+                sb.AppendLine("        {");
+                sb.AppendLine($"        var {elementVar} = {valueVar}[{indexVar}];");
+                GeneratePropertySerialization(context, sb, elementTarget, true, elementVar, skipValidation);
+                sb.AppendLine("        }");
+            }
+        }
+        else
+        {
+            var lengthVar = config.IsFixed ? config.Count.ToString() : $"length_{SanitizeIdentifier(target.Name)}";
+            if (!config.IsFixed) sb.AppendLine($"        var {lengthVar} = reader.ReadInt({config.LengthBits});");
+
+            sb.AppendLine($"        {targetVarName} = new {elementTypeName}[{lengthVar}];");
+            sb.AppendLine($"        for (var i_{SanitizeIdentifier(target.Name)} = 0; i_{SanitizeIdentifier(target.Name)} < {targetVarName}.Length; i_{SanitizeIdentifier(target.Name)}++)");
+            sb.AppendLine("        {");
+            GeneratePropertySerialization(context, sb, elementTarget, false,
+                $"{targetVarName}[i_{SanitizeIdentifier(target.Name)}]", skipValidation);
+            sb.AppendLine("        }");
+        }
+    }
+
+    private static string SanitizeIdentifier(string value)
+    {
+        var sb = new StringBuilder(value.Length);
+        foreach (var ch in value)
+            sb.Append(char.IsLetterOrDigit(ch) || ch == '_' ? ch : '_');
+
+        if (sb.Length == 0 || char.IsDigit(sb[0])) sb.Insert(0, '_');
+        return sb.ToString();
+    }
+
+    private static bool TryGetArrayConfig(ISymbol symbol, IArrayTypeSymbol arrayType, out ArrayConfig config,
+        out string error)
+    {
+        config = default;
+        error = string.Empty;
+
+        if (arrayType.Rank != 1)
+        {
+            error = "only one-dimensional arrays are supported.";
+            return false;
+        }
+
+        if (arrayType.ElementType is IArrayTypeSymbol)
+        {
+            error = "jagged arrays are not supported.";
+            return false;
+        }
+
+        if (arrayType.ElementType.SpecialType == SpecialType.System_String)
+        {
+            error = "string arrays are not supported yet because array length and element string length need separate bounds.";
+            return false;
+        }
+
+        if (arrayType.ElementType.TypeKind == TypeKind.Interface)
+        {
+            error = "interface arrays are not supported because elements cannot be preallocated during deserialization.";
+            return false;
+        }
+
+        var hasMaxLength = TryGetMaxLength(symbol, out var maxLength);
+        var hasFixedCount = TryGetFixedCount(symbol, out var fixedCount);
+
+        if (hasMaxLength && hasFixedCount)
+        {
+            error = "use either [MaxLength] or [FixedCount], not both.";
+            return false;
+        }
+
+        if (!hasMaxLength && !hasFixedCount)
+        {
+            error = "arrays must declare [MaxLength] or [FixedCount].";
+            return false;
+        }
+
+        if (hasMaxLength)
+        {
+            if (maxLength < 0)
+            {
+                error = "[MaxLength] must be zero or greater.";
+                return false;
+            }
+
+            config = new ArrayConfig(false, maxLength, CalculateBitsNeeded(maxLength));
+            return true;
+        }
+
+        if (fixedCount <= 0)
+        {
+            error = "[FixedCount] must be greater than zero.";
+            return false;
+        }
+
+        config = new ArrayConfig(true, fixedCount, 0);
+        return true;
+    }
+
+    private static bool TryGetFixedCount(ISymbol symbol, out int count)
+    {
+        count = 0;
+        var attr = symbol.GetAttributes()
+            .FirstOrDefault(a =>
+                a.AttributeClass?.ToDisplayString() is "BitPack.FixedCountAttribute" or "BitPack.FixedCount");
+        if (attr != null && attr.ConstructorArguments.Length > 0 && attr.ConstructorArguments[0].Value is int value)
+        {
+            count = value;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetMaxLength(ISymbol symbol, out int maxLength)
+    {
+        maxLength = 0;
+        var attr = symbol.GetAttributes()
+            .FirstOrDefault(a =>
+                a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.MaxLengthAttribute");
+        if (attr != null && attr.ConstructorArguments.Length > 0 && attr.ConstructorArguments[0].Value is int value)
+        {
+            maxLength = value;
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool IsBitPacketType(ITypeSymbol type)
     {
         return type.GetAttributes().Any(a =>
@@ -1049,6 +1233,7 @@ public class PacketGenerator : IIncrementalGenerator
     {
         var propType = target.Type;
 
+        if (propType is IArrayTypeSymbol arrayType) return GetArrayMaxBits(target, arrayType, seenTypes);
         if (propType.SpecialType == SpecialType.System_Boolean) return 1;
         if (propType.SpecialType == SpecialType.System_Char) return 16;
         if (propType.SpecialType == SpecialType.System_String)
@@ -1081,6 +1266,19 @@ public class PacketGenerator : IIncrementalGenerator
         return -1;
     }
 
+    private static int GetArrayMaxBits(SerializationTarget target, IArrayTypeSymbol arrayType, HashSet<string> seenTypes)
+    {
+        if (!TryGetArrayConfig(target.Symbol, arrayType, out var config, out _)) return -1;
+
+        var elementTarget = new SerializationTarget($"{target.Name}Element", arrayType.ElementType, target.Symbol, null);
+        var elementBits = GetTargetMaxBits(elementTarget, seenTypes);
+        if (elementBits < 0) return -1;
+
+        return config.IsFixed
+            ? config.Count * elementBits
+            : config.LengthBits + config.Count * elementBits;
+    }
+
     private static string BuildLayoutManifest(ITypeSymbol typeSymbol, List<SerializationTarget> targets, int packetMaxVersion,
         int maxBits, int maxBytes)
     {
@@ -1092,11 +1290,26 @@ public class PacketGenerator : IIncrementalGenerator
         foreach (var target in targets)
         {
             var targetBits = GetTargetMaxBits(target, new HashSet<string> { typeSymbol.ToDisplayString() });
-            sb.AppendLine(
-                $"field={target.Name};type={target.Type.ToDisplayString()};declaringType={target.Symbol.ContainingType.ToDisplayString()};key={target.FieldKey?.ToString() ?? ""};since={GetPropertyVersion(target.Symbol)};bits={targetBits}");
+            sb.AppendLine(BuildLayoutManifestLine(target, targetBits));
         }
 
         return sb.ToString();
+    }
+
+    private static string BuildLayoutManifestLine(SerializationTarget target, int targetBits)
+    {
+        var line =
+            $"field={target.Name};type={target.Type.ToDisplayString()};declaringType={target.Symbol.ContainingType.ToDisplayString()};key={target.FieldKey?.ToString() ?? ""};since={GetPropertyVersion(target.Symbol)}";
+
+        if (target.Type is IArrayTypeSymbol arrayType && TryGetArrayConfig(target.Symbol, arrayType, out var config, out _))
+        {
+            var elementTarget = new SerializationTarget($"{target.Name}Element", arrayType.ElementType, target.Symbol, null);
+            var elementBits = GetTargetMaxBits(elementTarget, new HashSet<string>());
+            line +=
+                $";array={(config.IsFixed ? "fixed" : "max")};count={config.Count};elementType={arrayType.ElementType.ToDisplayString()};elementBits={elementBits}";
+        }
+
+        return $"{line};bits={targetBits}";
     }
 
     private static uint ComputeFnv1A32(string value)
@@ -1185,5 +1398,19 @@ public class PacketGenerator : IIncrementalGenerator
         public ITypeSymbol Type { get; }
         public ISymbol Symbol { get; }
         public int? FieldKey { get; }
+    }
+
+    private readonly struct ArrayConfig
+    {
+        public ArrayConfig(bool isFixed, int count, int lengthBits)
+        {
+            IsFixed = isFixed;
+            Count = count;
+            LengthBits = lengthBits;
+        }
+
+        public bool IsFixed { get; }
+        public int Count { get; }
+        public int LengthBits { get; }
     }
 }

@@ -104,6 +104,14 @@ public partial class TestKeyedPacket
     [BitFieldKey(1)] public bool Middle { get; set; }
 }
 
+[BitPacket]
+public partial record TestArrayPacket
+{
+    [MaxLength(4)] [Range(0, 31)] public int[] EntityIds { get; set; } = Array.Empty<int>();
+    [FixedCount(4)] public bool[] Buttons { get; set; } = Array.Empty<bool>();
+    [MaxLength(2)] public TestPlayerSnapshot[] Snapshots { get; set; } = Array.Empty<TestPlayerSnapshot>();
+}
+
 [BitPacket(2)]
 public partial record TestVersionedInput
 {
@@ -364,6 +372,86 @@ public class SerializationTests
     }
 
     [Fact]
+    public void GeneratedPacket_BoundedArraysRoundTripAndReportMaxSize()
+    {
+        var packet = new TestArrayPacket
+        {
+            EntityIds = new[] { 1, 7, 31 },
+            Buttons = new[] { true, false, true, true },
+            Snapshots = new[]
+            {
+                new TestPlayerSnapshot { X = 1.23f, Y = -4.56f },
+                new TestPlayerSnapshot { X = -7.89f, Y = 10.11f }
+            }
+        };
+        var buffer = new byte[TestArrayPacket.MaxBytes];
+
+        packet.Serialize(new BitWriter(buffer));
+
+        var restored = TestArrayPacket.Read(new BitReader(buffer));
+        Assert.Equal(packet.EntityIds, restored.EntityIds);
+        Assert.Equal(packet.Buttons, restored.Buttons);
+        Assert.Equal(packet.Snapshots.Length, restored.Snapshots.Length);
+        Assert.Equal(packet.Snapshots[0].X, restored.Snapshots[0].X, 2);
+        Assert.Equal(packet.Snapshots[0].Y, restored.Snapshots[0].Y, 2);
+        Assert.Equal(packet.Snapshots[1].X, restored.Snapshots[1].X, 2);
+        Assert.Equal(packet.Snapshots[1].Y, restored.Snapshots[1].Y, 2);
+        Assert.Equal(97, TestArrayPacket.MaxBits);
+        Assert.Equal(13, TestArrayPacket.MaxBytes);
+        Assert.Contains("field=EntityIds;type=int[]", TestArrayPacket.LayoutManifest);
+        Assert.Contains("array=max;count=4;elementType=int;elementBits=5;bits=23", TestArrayPacket.LayoutManifest);
+        Assert.Contains("field=Buttons;type=bool[]", TestArrayPacket.LayoutManifest);
+        Assert.Contains("array=fixed;count=4;elementType=bool;elementBits=1;bits=4", TestArrayPacket.LayoutManifest);
+    }
+
+    [Fact]
+    public void GeneratedPacket_BoundedArrayTreatsNullVariableArrayAsEmpty()
+    {
+        var packet = new TestArrayPacket
+        {
+            EntityIds = null!,
+            Buttons = new[] { false, false, false, false },
+            Snapshots = null!
+        };
+        var buffer = new byte[TestArrayPacket.MaxBytes];
+
+        packet.Serialize(new BitWriter(buffer));
+
+        var restored = TestArrayPacket.Read(new BitReader(buffer));
+        Assert.Empty(restored.EntityIds);
+        Assert.Empty(restored.Snapshots);
+        Assert.Equal(packet.Buttons, restored.Buttons);
+    }
+
+    [Fact]
+    public void GeneratedPacket_BoundedArrayTooLongThrows()
+    {
+        var packet = new TestArrayPacket
+        {
+            EntityIds = new[] { 1, 2, 3, 4, 5 },
+            Buttons = new[] { false, false, false, false },
+            Snapshots = Array.Empty<TestPlayerSnapshot>()
+        };
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(new BitWriter(new byte[64])));
+        Assert.Contains("EntityIds", ex.ParamName);
+    }
+
+    [Fact]
+    public void GeneratedPacket_FixedArrayWrongLengthThrowsEvenWhenUnchecked()
+    {
+        var packet = new TestArrayPacket
+        {
+            EntityIds = Array.Empty<int>(),
+            Buttons = new[] { true, false },
+            Snapshots = Array.Empty<TestPlayerSnapshot>()
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(new BitWriter(new byte[64])));
+        Assert.Throws<ArgumentOutOfRangeException>(() => packet.SerializeUnchecked(new BitWriter(new byte[64])));
+    }
+
+    [Fact]
     public void GeneratedPacket_TrySerializeReturnsBytesWrittenAndRejectsSmallBuffer()
     {
         var packet = new TestGeneratedApiPacket
@@ -553,6 +641,13 @@ public partial class BadPacketNoSetter
         var references = AppDomain.CurrentDomain.GetAssemblies()
             .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
             .Select(a => MetadataReference.CreateFromFile(a.Location))
+            .Concat(new[]
+            {
+                MetadataReference.CreateFromFile(typeof(BitPacketAttribute).Assembly.Location),
+                MetadataReference.CreateFromFile(typeof(MaxLengthAttribute).Assembly.Location)
+            })
+            .GroupBy(r => r.Display)
+            .Select(g => g.First())
             .ToArray();
 
         var compilation = CSharpCompilation.Create(
@@ -638,6 +733,77 @@ public abstract partial class BadAbstractPacket
 ");
 
         Assert.Contains(errors, e => e.Id == "BP0001" && e.GetMessage().Contains("Abstract types cannot"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenArrayIsUnbounded()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+[BitPacket]
+public partial class BadUnboundedArrayPacket
+{
+    public int[] Values { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0004" && e.GetMessage().Contains("MaxLength"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenArrayHasBothLengthModes()
+    {
+        var errors = GetGeneratorErrors(@"
+using System.ComponentModel.DataAnnotations;
+using BitPack;
+
+[BitPacket]
+public partial class BadDualBoundArrayPacket
+{
+    [MaxLength(4)]
+    [BitPack.FixedCountAttribute(4)]
+    public int[] Values { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0004" && e.GetMessage().Contains("either"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenArrayIsMultidimensional()
+    {
+        var errors = GetGeneratorErrors(@"
+using System.ComponentModel.DataAnnotations;
+using BitPack;
+
+[BitPacket]
+public partial class BadMultidimensionalArrayPacket
+{
+    [MaxLength(4)]
+    public int[,] Values { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0004" && e.GetMessage().Contains("one-dimensional"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenArrayElementIsString()
+    {
+        var errors = GetGeneratorErrors(@"
+using System.ComponentModel.DataAnnotations;
+using BitPack;
+
+[BitPacket]
+public partial class BadStringArrayPacket
+{
+    [MaxLength(4)]
+    public string[] Values { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0004" && e.GetMessage().Contains("string arrays"));
     }
 
     [Fact]
@@ -859,8 +1025,11 @@ public abstract partial class BadAbstractPacket
         var generator = new PacketGenerator();
         var driver = CSharpGeneratorDriver.Create(generator);
 
-        driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out var diagnostics);
+        driver.RunGeneratorsAndUpdateCompilation(compilation, out var outputCompilation, out var diagnostics);
 
-        return diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+        return diagnostics
+            .Concat(outputCompilation.GetDiagnostics())
+            .Where(d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
     }
 }
