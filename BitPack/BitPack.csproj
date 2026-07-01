@@ -9,7 +9,7 @@
         <!-- NuGet Package Properties -->
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <PackageId>BitPack</PackageId>
-        <Version>1.1.0</Version>
+        <VersionPrefix>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\VERSION').Trim())</VersionPrefix>
         <Authors>Alex, Antigravity</Authors>
         <Description>A high-performance compile-time bit-level packet packing and serialization library for .NET.</Description>
         <PackageProjectUrl>https://github.com/alex/BitPack</PackageProjectUrl>
