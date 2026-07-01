@@ -1,13 +1,14 @@
 using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace BitPack;
 
 public class BitReader
 {
     private readonly byte[] _buffer;
-    private int _bitPosition = 0;
+    private int _bitPosition;
 
     public BitReader(byte[] buffer)
     {
@@ -15,7 +16,7 @@ public class BitReader
     }
 
     /// <summary>
-    /// Reads a single boolean value as 1 bit.
+    ///     Reads a single boolean value as 1 bit.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool ReadBool()
@@ -28,7 +29,7 @@ public class BitReader
     }
 
     /// <summary>
-    /// Reads an integer value using the specified number of bits.
+    ///     Reads an integer value using the specified number of bits.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int ReadInt(int bitCount)
@@ -37,7 +38,7 @@ public class BitReader
     }
 
     /// <summary>
-    /// Reads a signed 64-bit integer using the specified number of bits.
+    ///     Reads a signed 64-bit integer using the specified number of bits.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public long ReadLong(int bitCount)
@@ -101,7 +102,7 @@ public class BitReader
                 var mask = (1 << bitsToRead) - 1;
                 var byteBits = (_buffer[bIndex] >> bOffset) & mask;
 
-                value |= ((ulong)byteBits << shift);
+                value |= (ulong)byteBits << shift;
 
                 shift += bitsToRead;
                 currentBitPos += bitsToRead;
@@ -114,7 +115,7 @@ public class BitReader
     }
 
     /// <summary>
-    /// Reads an unsigned 64-bit integer using the specified number of bits.
+    ///     Reads an unsigned 64-bit integer using the specified number of bits.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ulong ReadULong(int bitCount)
@@ -123,7 +124,7 @@ public class BitReader
     }
 
     /// <summary>
-    /// Reads a 32-bit single-precision floating point number (4 bytes).
+    ///     Reads a 32-bit single-precision floating point number (4 bytes).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public float ReadFloat()
@@ -132,7 +133,7 @@ public class BitReader
     }
 
     /// <summary>
-    /// Reads a 64-bit double-precision floating point number (8 bytes).
+    ///     Reads a 64-bit double-precision floating point number (8 bytes).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public double ReadDouble()
@@ -141,7 +142,7 @@ public class BitReader
     }
 
     /// <summary>
-    /// Reads a DateTime value from its 64-bit Tick representation.
+    ///     Reads a DateTime value from its 64-bit Tick representation.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public DateTime ReadDateTime()
@@ -150,7 +151,7 @@ public class BitReader
     }
 
     /// <summary>
-    /// Reads a 128-bit high-precision decimal value (16 bytes).
+    ///     Reads a 128-bit high-precision decimal value (16 bytes).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public decimal ReadDecimal()
@@ -163,14 +164,22 @@ public class BitReader
     }
 
     /// <summary>
-    /// Reads and reconstructs a UTF-8 encoded string using its maxLength constraint.
+    ///     Reads and reconstructs a UTF-8 encoded string using its maxLength constraint.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string ReadString(int maxLength)
     {
         var maxBytes = maxLength * 4;
-        var lenBits = BitWriter.CalculateBitsNeeded(maxBytes);
-        var length = ReadInt(lenBits);
+        return ReadString(maxLength, BitWriter.CalculateBitsNeeded(maxBytes));
+    }
+
+    /// <summary>
+    ///     Reads and reconstructs a UTF-8 encoded string using a precomputed length header bit width.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public string ReadString(int maxLength, int lengthBits)
+    {
+        var length = ReadInt(lengthBits);
 
         if (length == 0) return string.Empty;
 
@@ -178,12 +187,10 @@ public class BitReader
         {
             Span<byte> bytes = stackalloc byte[length];
             ReadBytes(bytes);
-            return System.Text.Encoding.UTF8.GetString(bytes);
+            return Encoding.UTF8.GetString(bytes);
         }
-        else
-        {
-            return ReadStringLarge(length);
-        }
+
+        return ReadStringLarge(length);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -193,7 +200,7 @@ public class BitReader
         try
         {
             ReadBytes(pooled.AsSpan(0, length));
-            return System.Text.Encoding.UTF8.GetString(pooled.AsSpan(0, length));
+            return Encoding.UTF8.GetString(pooled.AsSpan(0, length));
         }
         finally
         {
@@ -202,7 +209,7 @@ public class BitReader
     }
 
     /// <summary>
-    /// Reads a block of bytes from the bitstream.
+    ///     Reads a block of bytes from the bitstream.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void ReadBytes(Span<byte> destination)
@@ -221,19 +228,32 @@ public class BitReader
         {
             var invShift = 8 - bitOffset;
             var mask = (1 << bitOffset) - 1;
-            for (var i = 0; i < destination.Length; i++)
+            var i = 0;
+
+            for (; i + 1 < destination.Length; i += 2)
+            {
+                var window = (uint)(_buffer[byteIndex] |
+                                    (_buffer[byteIndex + 1] << 8) |
+                                    (_buffer[byteIndex + 2] << 16));
+                destination[i] = (byte)(window >> bitOffset);
+                destination[i + 1] = (byte)(window >> (8 + bitOffset));
+                byteIndex += 2;
+            }
+
+            for (; i < destination.Length; i++)
             {
                 var b0 = _buffer[byteIndex] >> bitOffset;
                 var b1 = (_buffer[byteIndex + 1] & mask) << invShift;
                 destination[i] = (byte)(b0 | b1);
                 byteIndex++;
             }
+
             _bitPosition += destination.Length * 8;
         }
     }
 
     /// <summary>
-    /// Reset the reader state to start reading from the beginning.
+    ///     Reset the reader state to start reading from the beginning.
     /// </summary>
     public void Reset()
     {

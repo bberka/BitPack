@@ -1,8 +1,12 @@
 using System;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Runtime.Serialization;
+using System.Text.Json.Serialization;
+using BitPack.Generator;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
-using BitPack;
 
 namespace BitPack.Tests;
 
@@ -14,10 +18,9 @@ public interface IInventoryItem : IBitSerializable
 [BitPacket]
 public partial record WeaponItem : IInventoryItem
 {
+    [Range(0, 100)] public int Durability { get; set; }
+
     public int ItemId { get; set; }
-    
-    [Range(0, 100)]
-    public int Durability { get; set; }
 }
 
 [BitPacket]
@@ -27,16 +30,13 @@ public partial record TestPlayerSnapshot
     [Precision(2)] // Quantized fixed-point: -500.00 to 500.00 (100,001 values -> 17 bits)
     public float X { get; set; }
 
-    [Range(-500.0, 500.0)]
-    [Precision(2)]
-    public float Y { get; set; }
+    [Range(-500.0, 500.0)] [Precision(2)] public float Y { get; set; }
 }
 
 [BitPacket]
 public partial record TestPlayerInput
 {
-    [Range(0, 360)]
-    public int AimAngle { get; set; }
+    [Range(0, 360)] public int AimAngle { get; set; }
 
     public bool IsMoving { get; set; }
 
@@ -51,11 +51,11 @@ public partial record TestPlayerInput
 public partial record TestPlayerExtendedInput
 {
     public decimal AccountBalance { get; set; }
-    
+
     public nint NativeSessionId { get; set; }
-    
+
     public nuint NativeThreadMask { get; set; }
-    
+
     // Interface referencing concrete implementation
     public IInventoryItem Weapon { get; set; } = null!;
 }
@@ -73,51 +73,60 @@ public partial record TestEnumPacket
     public TestGameState State { get; set; }
 }
 
+[BitPacket]
+public partial record TestGeneratedApiPacket
+{
+    [Range(0, 100)] public int Value { get; set; }
+    public bool Flag { get; set; }
+    [MaxLength(4)] public string Name { get; set; } = "";
+    public TestGameState State { get; set; }
+}
+
 [BitPacket(2)]
 public partial record TestVersionedInput
 {
-    [Range(0, 100)]
-    public int BaseSpeed { get; set; }
+    [Range(0, 100)] public int BaseSpeed { get; set; }
 
-    [SinceVersion(2)]
-    public bool ExtraBoost { get; set; }
+    [SinceVersion(2)] public bool ExtraBoost { get; set; }
 }
 
 [BitPacket]
 public partial record TestIgnoredAndPrivatePacket
 {
-    [System.Text.Json.Serialization.JsonIgnore]
-    public int IgnoredProperty1 { get; set; } = 999;
+    [DataMember] private int privatePromotedField = 42;
 
-    [System.Runtime.Serialization.IgnoreDataMember]
-    public string IgnoredProperty2 { get; set; } = "ignore me";
+    [JsonIgnore] public int IgnoredProperty1 { get; set; } = 999;
+
+    [IgnoreDataMember] public string IgnoredProperty2 { get; set; } = "ignore me";
 
     public bool PublicTarget { get; set; }
 
-    [System.Runtime.Serialization.DataMember]
-    private int privatePromotedField = 42;
+    [DataMember] internal string InternalPromotedProperty { get; set; } = "internal";
 
-    [System.Runtime.Serialization.DataMember]
-    internal string InternalPromotedProperty { get; set; } = "internal";
+    public int GetPrivateField()
+    {
+        return privatePromotedField;
+    }
 
-    public int GetPrivateField() => privatePromotedField;
-    public void SetPrivateField(int val) => privatePromotedField = val;
+    public void SetPrivateField(int val)
+    {
+        privatePromotedField = val;
+    }
 }
 
 [BitPacket]
 public partial record TestUnicodePacket
 {
-    [MaxLength(16)]
-    public string Message { get; set; } = "";
+    [MaxLength(16)] public string Message { get; set; } = "";
 }
 
 [BitPacket]
 public partial record TestInitAndRequiredPacket
 {
     public int RegularVal { get; set; }
-    
+
     public int InitOnlyVal { get; init; }
-    
+
     public required string RequiredName { get; set; }
 }
 
@@ -130,23 +139,21 @@ public partial record TestPrimaryCtorPacket(
 [BitPacket]
 public partial record TestRangeOverflowPacket
 {
-    [Range(0, 100)]    public int SmallValue { get; set; }
-    [Range(-180, 180)] public int Latitude  { get; set; }
+    [Range(0, 100)] public int SmallValue { get; set; }
+    [Range(-180, 180)] public int Latitude { get; set; }
 }
 
 [BitPacket]
 public partial record TestStringOverflowPacket
 {
-    [MaxLength(5)]      public string Name { get; set; } = "";
-    [StringLength(10)]  public string Bio  { get; set; } = "";
+    [MaxLength(5)] public string Name { get; set; } = "";
+    [StringLength(10)] public string Bio { get; set; } = "";
 }
 
 [BitPacket]
 public partial record TestQuantizedOverflowPacket
 {
-    [Range(-500.0, 500.0)]
-    [Precision(2)]
-    public float Coord { get; set; }
+    [Range(-500.0, 500.0)] [Precision(2)] public float Coord { get; set; }
 }
 
 [BitPacket]
@@ -163,7 +170,7 @@ public class SerializationTests
     {
         // Arrange
         var buffer = new byte[128];
-        
+
         var originalPacket = new TestPlayerInput
         {
             AimAngle = 270,
@@ -200,7 +207,7 @@ public class SerializationTests
     {
         // Arrange
         var buffer = new byte[128];
-        
+
         var originalPacket = new TestPlayerExtendedInput
         {
             AccountBalance = 123456.7890m,
@@ -227,7 +234,7 @@ public class SerializationTests
         Assert.Equal(originalPacket.NativeThreadMask, restoredPacket.NativeThreadMask);
         Assert.Equal(originalPacket.Weapon.ItemId, restoredPacket.Weapon.ItemId);
         Assert.Equal(
-            ((WeaponItem)originalPacket.Weapon).Durability, 
+            ((WeaponItem)originalPacket.Weapon).Durability,
             ((WeaponItem)restoredPacket.Weapon).Durability
         );
     }
@@ -238,9 +245,9 @@ public class SerializationTests
         // Arrange
         var buffer = new byte[128];
         var writer = new BitWriter(buffer);
-        
+
         // Write undefined state index 3 (only 0, 1, 2 are defined)
-        writer.WriteInt(3, 2); 
+        writer.WriteInt(3, 2);
 
         // Act
         var reader = new BitReader(buffer);
@@ -277,15 +284,73 @@ public class SerializationTests
     }
 
     [Fact]
+    public void GeneratedPacket_ExposesMaxSizeAndLayoutMetadata()
+    {
+        Assert.Equal(143, TestGeneratedApiPacket.MaxBits);
+        Assert.Equal(18, TestGeneratedApiPacket.MaxBytes);
+        Assert.NotEqual(0u, TestGeneratedApiPacket.LayoutHash);
+        Assert.Contains("type=BitPack.Tests.TestGeneratedApiPacket", TestGeneratedApiPacket.LayoutManifest);
+        Assert.Contains("field=Value;type=int;since=1;bits=7", TestGeneratedApiPacket.LayoutManifest);
+        Assert.Contains("field=Name;type=string;since=1;bits=133", TestGeneratedApiPacket.LayoutManifest);
+    }
+
+    [Fact]
+    public void GeneratedPacket_UnknownCustomFieldSizeUsesNegativeMaxSize()
+    {
+        Assert.Equal(-1, TestPlayerInput.MaxBits);
+        Assert.Equal(-1, TestPlayerInput.MaxBytes);
+        Assert.Contains("field=HealthPercent;type=BitPack.Tests.Percent;since=1;bits=-1", TestPlayerInput.LayoutManifest);
+    }
+
+    [Fact]
+    public void GeneratedPacket_TrySerializeReturnsBytesWrittenAndRejectsSmallBuffer()
+    {
+        var packet = new TestGeneratedApiPacket
+        {
+            Value = 42,
+            Flag = true,
+            Name = "AB",
+            State = TestGameState.Running
+        };
+
+        Assert.False(packet.TrySerialize(new byte[TestGeneratedApiPacket.MaxBytes - 1], out var smallBytesWritten));
+        Assert.Equal(0, smallBytesWritten);
+
+        var buffer = new byte[TestGeneratedApiPacket.MaxBytes];
+        Assert.True(packet.TrySerialize(buffer, out var bytesWritten));
+        Assert.True(bytesWritten > 0);
+
+        var restored = TestGeneratedApiPacket.Read(new BitReader(buffer));
+        Assert.Equal(packet.Value, restored.Value);
+        Assert.Equal(packet.Flag, restored.Flag);
+        Assert.Equal(packet.Name, restored.Name);
+        Assert.Equal(packet.State, restored.State);
+    }
+
+    [Fact]
+    public void GeneratedPacket_SerializeUncheckedSkipsGeneratedRangeChecks()
+    {
+        var packet = new TestRangeOverflowPacket { SmallValue = 200, Latitude = 0 };
+        var buffer = new byte[16];
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(new BitWriter(buffer)));
+
+        packet.SerializeUnchecked(new BitWriter(buffer));
+
+        var restored = TestRangeOverflowPacket.Read(new BitReader(buffer));
+        Assert.NotEqual(200, restored.SmallValue);
+    }
+
+    [Fact]
     public void GeneratedPacket_DeserializesOlderVersionStream_FallsBackGracefully()
     {
         // Arrange
         var buffer = new byte[128];
         var writer = new BitWriter(buffer);
-        
+
         // Simulate a Version 1 stream manually:
-        writer.WriteInt(1, 4);   // Version 1 Header
-        writer.WriteInt(75, 7);  // BaseSpeed: Range 0-100 (7 bits)
+        writer.WriteInt(1, 4); // Version 1 Header
+        writer.WriteInt(75, 7); // BaseSpeed: Range 0-100 (7 bits)
         // Note: version 2 field 'ExtraBoost' is NOT written!
 
         // Act - Deserialize version 1 stream into version 2 model
@@ -422,28 +487,28 @@ public partial class BadPacketNoSetter
 }
 ";
 
-        var syntaxTree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(sourceCode);
-        
+        var syntaxTree = CSharpSyntaxTree.ParseText(sourceCode);
+
         var references = AppDomain.CurrentDomain.GetAssemblies()
             .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-            .Select(a => Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(a.Location))
+            .Select(a => MetadataReference.CreateFromFile(a.Location))
             .ToArray();
 
-        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+        var compilation = CSharpCompilation.Create(
             "TestAssembly",
             new[] { syntaxTree },
             references,
-            new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-        var generator = new BitPack.Generator.PacketGenerator();
-        var driver = Microsoft.CodeAnalysis.CSharp.CSharpGeneratorDriver.Create(generator);
-        
+        var generator = new PacketGenerator();
+        var driver = CSharpGeneratorDriver.Create(generator);
+
         // Act
         driver.RunGeneratorsAndUpdateCompilation(compilation, out var outputCompilation, out var diagnostics);
 
         // Assert
-        var errors = diagnostics.Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error).ToList();
-        
+        var errors = diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+
         Assert.Contains(errors, e => e.GetMessage().Contains("must have a getter accessor"));
         Assert.Contains(errors, e => e.GetMessage().Contains("must have a setter or init accessor"));
     }
@@ -628,7 +693,8 @@ public partial class BadPacketNoSetter
     public void GeneratedPacket_EnumWithRangeOverflow_Throws()
     {
         var buffer = new byte[128];
-        var packet = new TestEnumOverflowPacket { SmallRangeState = (TestGameState)6, AutoDetectState = TestGameState.Idle };
+        var packet = new TestEnumOverflowPacket
+            { SmallRangeState = (TestGameState)6, AutoDetectState = TestGameState.Idle };
 
         var writer = new BitWriter(buffer);
         var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));
@@ -640,7 +706,8 @@ public partial class BadPacketNoSetter
     public void GeneratedPacket_EnumAutoDetectOverflow_Throws()
     {
         var buffer = new byte[128];
-        var packet = new TestEnumOverflowPacket { SmallRangeState = TestGameState.Idle, AutoDetectState = (TestGameState)99 };
+        var packet = new TestEnumOverflowPacket
+            { SmallRangeState = TestGameState.Idle, AutoDetectState = (TestGameState)99 };
 
         var writer = new BitWriter(buffer);
         var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(writer));

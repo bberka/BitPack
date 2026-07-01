@@ -1,37 +1,37 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
-    <ImplicitUsings>disable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <LangVersion>11</LangVersion>
-    
-    <!-- NuGet Package Properties -->
-    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <PackageId>BitPack</PackageId>
-    <Version>1.0.0</Version>
-    <Authors>Alex, Antigravity</Authors>
-    <Description>A high-performance compile-time bit-level packet packing and serialization library for .NET.</Description>
-    <PackageProjectUrl>https://github.com/alex/BitPack</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/alex/BitPack</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <PackageTags>networking game-development bit-packing serialization binary source-generator</PackageTags>
-    
-    <!-- Custom target to include the compiled generator DLL inside the final NuGet package -->
-    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_AddAnalyzersToPackage</TargetsForTfmSpecificContentInPackage>
-  </PropertyGroup>
+    <PropertyGroup>
+        <TargetFrameworks>netstandard2.1;net10.0</TargetFrameworks>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <LangVersion>11</LangVersion>
 
-  <ItemGroup>
-    <!-- Reference the Source Generator project as an Analyzer during compilation -->
-    <ProjectReference Include="..\BitPack.Generator\BitPack.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.0.0" />
-  </ItemGroup>
+        <!-- NuGet Package Properties -->
+        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+        <PackageId>BitPack</PackageId>
+        <Version>1.1.0</Version>
+        <Authors>Alex, Antigravity</Authors>
+        <Description>A high-performance compile-time bit-level packet packing and serialization library for .NET.</Description>
+        <PackageProjectUrl>https://github.com/alex/BitPack</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/alex/BitPack</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageTags>networking game-development bit-packing serialization binary source-generator</PackageTags>
 
-  <Target Name="_AddAnalyzersToPackage">
+        <!-- Custom target to include the compiled generator DLL inside the final NuGet package -->
+        <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_AddAnalyzersToPackage</TargetsForTfmSpecificContentInPackage>
+    </PropertyGroup>
+
     <ItemGroup>
-      <!-- Grab the compiled generator DLL and place it into NuGet's analyzer path -->
-      <TfmSpecificPackageFile Include="..\BitPack.Generator\bin\$(Configuration)\netstandard2.0\BitPack.Generator.dll" PackagePath="analyzers/dotnet/cs" />
+        <!-- Reference the Source Generator project as an Analyzer during compilation -->
+        <ProjectReference Include="..\BitPack.Generator\BitPack.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false"/>
+        <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.0.0"/>
     </ItemGroup>
-  </Target>
+
+    <Target Name="_AddAnalyzersToPackage" Condition="'$(TargetFramework)' == 'netstandard2.1'">
+        <ItemGroup>
+            <!-- Grab the compiled generator DLL and place it into NuGet's analyzer path -->
+            <TfmSpecificPackageFile Include="..\BitPack.Generator\bin\$(Configuration)\netstandard2.0\BitPack.Generator.dll" PackagePath="analyzers/dotnet/cs"/>
+        </ItemGroup>
+    </Target>
 
 </Project>

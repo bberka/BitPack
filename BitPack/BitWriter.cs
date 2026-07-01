@@ -2,13 +2,14 @@ using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace BitPack;
 
 public class BitWriter
 {
     private readonly byte[] _buffer;
-    private int _bitPosition = 0;
+    private int _bitPosition;
 
     public BitWriter(byte[] buffer)
     {
@@ -16,7 +17,12 @@ public class BitWriter
     }
 
     /// <summary>
-    /// Writes a single boolean value as 1 bit.
+    ///     Total number of bytes written to the buffer.
+    /// </summary>
+    public int BytesWritten => (_bitPosition + 7) / 8;
+
+    /// <summary>
+    ///     Writes a single boolean value as 1 bit.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteBool(bool value)
@@ -32,7 +38,7 @@ public class BitWriter
     }
 
     /// <summary>
-    /// Writes an integer value using the specified number of bits.
+    ///     Writes an integer value using the specified number of bits.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteInt(int value, int bitCount)
@@ -41,7 +47,7 @@ public class BitWriter
     }
 
     /// <summary>
-    /// Writes a signed 64-bit integer using the specified number of bits.
+    ///     Writes a signed 64-bit integer using the specified number of bits.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteLong(long value, int bitCount)
@@ -57,7 +63,7 @@ public class BitWriter
         if (totalBits <= 8 && byteIndex + 1 <= _buffer.Length)
         {
             var mask = (byte)((1 << bitCount) - 1);
-            var val = (byte)(uValue & (ulong)mask);
+            var val = (byte)(uValue & mask);
             ref var b = ref _buffer[byteIndex];
             b = (byte)((b & ~(mask << bitOffset)) | (val << bitOffset));
         }
@@ -75,8 +81,8 @@ public class BitWriter
         // Fast path: fits in 4 bytes (≤32 bits)
         else if (totalBits <= 32 && byteIndex + 4 <= _buffer.Length)
         {
-            var mask = (uint)(uint.MaxValue >> (32 - bitCount));
-            var val = (uint)(uValue & (ulong)mask);
+            var mask = uint.MaxValue >> (32 - bitCount);
+            var val = (uint)(uValue & mask);
             var targetMask = mask << bitOffset;
             var shiftedVal = val << bitOffset;
             var current = Unsafe.ReadUnaligned<uint>(ref _buffer[byteIndex]);
@@ -138,7 +144,7 @@ public class BitWriter
     }
 
     /// <summary>
-    /// Writes an unsigned 64-bit integer using the specified number of bits.
+    ///     Writes an unsigned 64-bit integer using the specified number of bits.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteULong(ulong value, int bitCount)
@@ -147,7 +153,7 @@ public class BitWriter
     }
 
     /// <summary>
-    /// Writes a 32-bit single-precision floating point number (4 bytes).
+    ///     Writes a 32-bit single-precision floating point number (4 bytes).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteFloat(float value)
@@ -156,7 +162,7 @@ public class BitWriter
     }
 
     /// <summary>
-    /// Writes a 64-bit double-precision floating point number (8 bytes).
+    ///     Writes a 64-bit double-precision floating point number (8 bytes).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteDouble(double value)
@@ -165,7 +171,7 @@ public class BitWriter
     }
 
     /// <summary>
-    /// Writes a DateTime value as its 64-bit Tick representation.
+    ///     Writes a DateTime value as its 64-bit Tick representation.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteDateTime(DateTime value)
@@ -176,12 +182,17 @@ public class BitWriter
     }
 
     /// <summary>
-    /// Writes a 128-bit high-precision decimal value (16 bytes).
+    ///     Writes a 128-bit high-precision decimal value (16 bytes).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteDecimal(decimal value)
     {
+#if NET5_0_OR_GREATER
+        Span<int> bits = stackalloc int[4];
+        decimal.GetBits(value, bits);
+#else
         var bits = decimal.GetBits(value);
+#endif
         WriteInt(bits[0], 32);
         WriteInt(bits[1], 32);
         WriteInt(bits[2], 32);
@@ -189,16 +200,26 @@ public class BitWriter
     }
 
     /// <summary>
-    /// Writes a string using UTF-8 encoding, packing its length and byte data.
+    ///     Writes a string using UTF-8 encoding, packing its length and byte data.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteString(string value, int maxLength)
+    {
+        WriteString(value, maxLength, CalculateBitsNeeded(maxLength * 4));
+    }
+
+    /// <summary>
+    ///     Writes a string using UTF-8 encoding with a precomputed length header bit width.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void WriteString(string value, int maxLength, int lengthBits)
     {
         if (maxLength < 0)
             throw new ArgumentOutOfRangeException(nameof(maxLength), maxLength, "Maximum length must be non-negative.");
 
         if (value != null && value.Length > maxLength)
-            throw new ArgumentOutOfRangeException(nameof(value), value.Length, $"String length ({value.Length}) exceeds maximum allowed length ({maxLength}).");
+            throw new ArgumentOutOfRangeException(nameof(value), value.Length,
+                $"String length ({value.Length}) exceeds maximum allowed length ({maxLength}).");
 
         var text = value ?? string.Empty;
         var maxBytes = maxLength * 4;
@@ -207,26 +228,24 @@ public class BitWriter
         if (maxBytes <= 256)
         {
             Span<byte> tempBytes = stackalloc byte[maxBytes];
-            var bytesWritten = System.Text.Encoding.UTF8.GetBytes(text.AsSpan(0, length), tempBytes);
-            var lenBits = CalculateBitsNeeded(maxBytes);
-            WriteInt(bytesWritten, lenBits);
+            var bytesWritten = Encoding.UTF8.GetBytes(text.AsSpan(0, length), tempBytes);
+            WriteInt(bytesWritten, lengthBits);
             WriteBytes(tempBytes.Slice(0, bytesWritten));
         }
         else
         {
-            WriteStringLarge(text, maxBytes, length);
+            WriteStringLarge(text, maxBytes, length, lengthBits);
         }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void WriteStringLarge(string text, int maxBytes, int length)
+    private void WriteStringLarge(string text, int maxBytes, int length, int lengthBits)
     {
         var pooled = ArrayPool<byte>.Shared.Rent(maxBytes);
         try
         {
-            var bytesWritten = System.Text.Encoding.UTF8.GetBytes(text.AsSpan(0, length), pooled);
-            var lenBits = CalculateBitsNeeded(maxBytes);
-            WriteInt(bytesWritten, lenBits);
+            var bytesWritten = Encoding.UTF8.GetBytes(text.AsSpan(0, length), pooled);
+            WriteInt(bytesWritten, lengthBits);
             WriteBytes(pooled.AsSpan(0, bytesWritten));
         }
         finally
@@ -236,7 +255,7 @@ public class BitWriter
     }
 
     /// <summary>
-    /// Writes a block of bytes to the bitstream.
+    ///     Writes a block of bytes to the bitstream.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteBytes(ReadOnlySpan<byte> source)
@@ -262,11 +281,11 @@ public class BitWriter
             var i = 0;
             if (srcLen >= 2)
             {
-                var srcWords = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, ushort>(source);
+                var srcWords = MemoryMarshal.Cast<byte, ushort>(source);
                 foreach (var word in srcWords)
                 {
-                    byte s0 = (byte)word;
-                    byte s1 = (byte)(word >> 8);
+                    var s0 = (byte)word;
+                    var s1 = (byte)(word >> 8);
                     _buffer[byteIndex] = (byte)((_buffer[byteIndex] & lowMask) | (s0 << bitOffset));
                     _buffer[byteIndex + 1] = (byte)((s0 >> invShift) | (s1 << bitOffset));
                     _buffer[byteIndex + 2] = (byte)((_buffer[byteIndex + 2] & highMask) | (s1 >> invShift));
@@ -274,21 +293,23 @@ public class BitWriter
                     i += 2;
                 }
             }
+
             // Handle remaining byte if length is odd
             for (; i < srcLen; i++)
             {
-                byte b = source[i];
+                var b = source[i];
                 _buffer[byteIndex] = (byte)((_buffer[byteIndex] & lowMask) | (b << bitOffset));
                 _buffer[byteIndex + 1] = (byte)((_buffer[byteIndex + 1] & highMask) | (b >> invShift));
                 byteIndex++;
             }
+
             _bitPosition += srcLen * 8;
         }
     }
 
     /// <summary>
-    /// Calculates the minimum number of bits needed to represent values 0..maxValue.
-    /// Uses integer bit manipulation instead of floating-point Math.Log.
+    ///     Calculates the minimum number of bits needed to represent values 0..maxValue.
+    ///     Uses integer bit manipulation instead of floating-point Math.Log.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static int CalculateBitsNeeded(int maxValue)
@@ -301,18 +322,14 @@ public class BitWriter
             bits++;
             v >>= 1;
         }
+
         return bits;
     }
 
     /// <summary>
-    /// Total number of bytes written to the buffer.
-    /// </summary>
-    public int BytesWritten => (_bitPosition + 7) / 8;
-
-    /// <summary>
-    /// Reset the writer state to start writing from the beginning.
-    /// No buffer clear is needed because WriteLong and WriteBool explicitly
-    /// mask and overwrite all target bits during each write operation.
+    ///     Reset the writer state to start writing from the beginning.
+    ///     No buffer clear is needed because WriteLong and WriteBool explicitly
+    ///     mask and overwrite all target bits during each write operation.
     /// </summary>
     public void Reset()
     {

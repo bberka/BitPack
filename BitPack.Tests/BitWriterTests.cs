@@ -1,6 +1,5 @@
 using System;
 using Xunit;
-using BitPack;
 
 namespace BitPack.Tests;
 
@@ -56,5 +55,50 @@ public class BitWriterTests
             writer.WriteString("x", -1));
 
         Assert.Equal("maxLength", ex.ParamName);
+    }
+
+    [Fact]
+    public void ReadBytes_UnalignedRoundTripsEveryOffsetAndLength()
+    {
+        for (var offset = 1; offset < 8; offset++)
+        for (var length = 0; length <= 64; length++)
+        {
+            var buffer = new byte[128];
+            var source = new byte[length];
+            for (var i = 0; i < source.Length; i++) source[i] = (byte)(i * 31 + offset + length);
+
+            var writer = new BitWriter(buffer);
+            for (var i = 0; i < offset; i++) writer.WriteBool((i & 1) == 0);
+            writer.WriteBytes(source);
+
+            var reader = new BitReader(buffer);
+            for (var i = 0; i < offset; i++) Assert.Equal((i & 1) == 0, reader.ReadBool());
+
+            var destination = new byte[length];
+            reader.ReadBytes(destination);
+
+            Assert.Equal(source, destination);
+        }
+    }
+
+    [Fact]
+    public void WriteDecimal_DoesNotAllocate()
+    {
+        var buffer = new byte[32];
+        var writer = new BitWriter(buffer);
+
+        writer.WriteDecimal(123456.7890m);
+        writer.Reset();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+        {
+            writer.Reset();
+            writer.WriteDecimal(123456.7890m);
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, allocated);
     }
 }

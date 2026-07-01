@@ -12,10 +12,7 @@ public readonly struct Percent : IEquatable<Percent>
 
     public Percent(long value)
     {
-        if (value < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(value), "Percent value cannot be negative.");
-        }
+        if (value < 0) throw new ArgumentOutOfRangeException(nameof(value), "Percent value cannot be negative.");
         Value = value;
     }
 
@@ -79,9 +76,7 @@ public readonly struct Percent : IEquatable<Percent>
     public static Percent operator -(Percent left, Percent right)
     {
         if (left.Value < right.Value)
-        {
             throw new ArgumentOutOfRangeException(nameof(right), "Resulting percent cannot be negative.");
-        }
         return new Percent(left.Value - right.Value);
     }
 
@@ -94,10 +89,7 @@ public readonly struct Percent : IEquatable<Percent>
 
     public static Percent operator /(Percent left, decimal right)
     {
-        if (right <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(right), "Divider must be greater than zero.");
-        }
+        if (right <= 0) throw new ArgumentOutOfRangeException(nameof(right), "Divider must be greater than zero.");
         return new Percent((long)(left.Value / right));
     }
 

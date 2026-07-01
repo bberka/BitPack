@@ -12,27 +12,27 @@ namespace BitPack.Generator;
 public class PacketGenerator : IIncrementalGenerator
 {
     private static readonly DiagnosticDescriptor UnsupportedTypeError = new(
-        id: "BP0001",
-        title: "Unsupported Property Type",
-        messageFormat: "Property '{0}' of type '{1}' must be annotated with [BitPacket] or implement custom serialization (Serialize and static Deserialize)",
-        category: "BitPackGenerator",
-        defaultSeverity: DiagnosticSeverity.Error,
-        isEnabledByDefault: true);
+        "BP0001",
+        "Unsupported Property Type",
+        "Property '{0}' of type '{1}' must be annotated with [BitPacket] or implement custom serialization (Serialize and static Deserialize)",
+        "BitPackGenerator",
+        DiagnosticSeverity.Error,
+        true);
 
     private static readonly DiagnosticDescriptor UnconstrainedPropertyWarning = new(
-        id: "BP0002",
-        title: "Unconstrained Property Warning",
-        messageFormat: "Property '{0}' of type '{1}' does not specify a range or length attribute. Full type storage will be used, which is unoptimized.",
-        category: "BitPackGenerator",
-        defaultSeverity: DiagnosticSeverity.Warning,
-        isEnabledByDefault: true);
+        "BP0002",
+        "Unconstrained Property Warning",
+        "Property '{0}' of type '{1}' does not specify a range or length attribute. Full type storage will be used, which is unoptimized.",
+        "BitPackGenerator",
+        DiagnosticSeverity.Warning,
+        true);
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var packetDeclarations = context.SyntaxProvider
             .CreateSyntaxProvider(
-                predicate: static (s, _) => s is TypeDeclarationSyntax tds && tds.AttributeLists.Count > 0,
-                transform: static (ctx, _) => GetSemanticTargetForGeneration(ctx))
+                static (s, _) => s is TypeDeclarationSyntax tds && tds.AttributeLists.Count > 0,
+                static (ctx, _) => GetSemanticTargetForGeneration(ctx))
             .Where(static m => m is not null);
 
         context.RegisterSourceOutput(packetDeclarations, static (spc, source) => Execute(spc, source!));
@@ -43,20 +43,16 @@ public class PacketGenerator : IIncrementalGenerator
         var typeDeclarationSyntax = (TypeDeclarationSyntax)context.Node;
 
         foreach (var attributeListSyntax in typeDeclarationSyntax.AttributeLists)
+        foreach (var attributeSyntax in attributeListSyntax.Attributes)
         {
-            foreach (var attributeSyntax in attributeListSyntax.Attributes)
+            var symbol = context.SemanticModel.GetSymbolInfo(attributeSyntax).Symbol;
+            if (symbol is IMethodSymbol attributeConstructor)
             {
-                var symbol = context.SemanticModel.GetSymbolInfo(attributeSyntax).Symbol;
-                if (symbol is IMethodSymbol attributeConstructor)
-                {
-                    var attributeContainingTypeSymbol = attributeConstructor.ContainingType;
-                    var fullName = attributeContainingTypeSymbol.ToDisplayString();
+                var attributeContainingTypeSymbol = attributeConstructor.ContainingType;
+                var fullName = attributeContainingTypeSymbol.ToDisplayString();
 
-                    if (fullName == "BitPack.BitPacketAttribute")
-                    {
-                        return context.SemanticModel.GetDeclaredSymbol(typeDeclarationSyntax) as ITypeSymbol;
-                    }
-                }
+                if (fullName == "BitPack.BitPacketAttribute")
+                    return context.SemanticModel.GetDeclaredSymbol(typeDeclarationSyntax) as ITypeSymbol;
             }
         }
 
@@ -70,16 +66,11 @@ public class PacketGenerator : IIncrementalGenerator
             : typeSymbol.ContainingNamespace.ToDisplayString();
 
         var typeName = typeSymbol.Name;
-        
+
         var typeKeyword = "class";
         if (typeSymbol.IsRecord)
-        {
             typeKeyword = typeSymbol.IsValueType ? "record struct" : "record";
-        }
-        else if (typeSymbol.IsValueType)
-        {
-            typeKeyword = "struct";
-        }
+        else if (typeSymbol.IsValueType) typeKeyword = "struct";
 
         var targets = GetSerializationTargets(typeSymbol);
         ValidateTargetSafety(context, typeSymbol, targets);
@@ -101,28 +92,66 @@ public class PacketGenerator : IIncrementalGenerator
 
         // Retrieve packet version
         var packetMaxVersion = GetPacketVersion(typeSymbol);
+        var maxBits = GetPacketMaxBits(typeSymbol, targets, packetMaxVersion);
+        var maxBytes = maxBits < 0 ? -1 : (maxBits + 7) / 8;
+        var layoutManifest = BuildLayoutManifest(typeSymbol, targets, packetMaxVersion, maxBits, maxBytes);
+        var layoutHash = ComputeFnv1A32(layoutManifest);
+
+        sourceBuilder.AppendLine($"    public const int MaxBits = {maxBits};");
+        sourceBuilder.AppendLine($"    public const int MaxBytes = {maxBytes};");
+        sourceBuilder.AppendLine($"    public const uint LayoutHash = 0x{layoutHash:X8}u;");
+        sourceBuilder.AppendLine($"    public const string LayoutManifest = \"{EscapeStringLiteral(layoutManifest)}\";");
+        sourceBuilder.AppendLine();
 
         // Generate Serialize method
         sourceBuilder.AppendLine("    public void Serialize(BitWriter writer)");
         sourceBuilder.AppendLine("    {");
-        if (packetMaxVersion > 1)
-        {
-            sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
-        }
-        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, isWriting: true, packetMaxVersion);
+        if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
+
+        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, true, packetMaxVersion, false);
+        sourceBuilder.AppendLine("    }");
+        sourceBuilder.AppendLine();
+
+        sourceBuilder.AppendLine("    public void SerializeUnchecked(BitWriter writer)");
+        sourceBuilder.AppendLine("    {");
+        if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
+        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, true, packetMaxVersion, true);
+        sourceBuilder.AppendLine("    }");
+        sourceBuilder.AppendLine();
+
+        sourceBuilder.AppendLine("    public bool TrySerialize(byte[] buffer, out int bytesWritten)");
+        sourceBuilder.AppendLine("    {");
+        sourceBuilder.AppendLine("        bytesWritten = 0;");
+        sourceBuilder.AppendLine("        if (buffer == null) return false;");
+        if (maxBytes >= 0)
+            sourceBuilder.AppendLine($"        if (buffer.Length < {maxBytes}) return false;");
+        sourceBuilder.AppendLine("        var writer = new BitWriter(buffer);");
+        sourceBuilder.AppendLine("        try");
+        sourceBuilder.AppendLine("        {");
+        sourceBuilder.AppendLine("            Serialize(writer);");
+        sourceBuilder.AppendLine("            bytesWritten = writer.BytesWritten;");
+        sourceBuilder.AppendLine("            return true;");
+        sourceBuilder.AppendLine("        }");
+        sourceBuilder.AppendLine("        catch (ArgumentOutOfRangeException)");
+        sourceBuilder.AppendLine("        {");
+        sourceBuilder.AppendLine("            bytesWritten = 0;");
+        sourceBuilder.AppendLine("            return false;");
+        sourceBuilder.AppendLine("        }");
+        sourceBuilder.AppendLine("        catch (IndexOutOfRangeException)");
+        sourceBuilder.AppendLine("        {");
+        sourceBuilder.AppendLine("            bytesWritten = 0;");
+        sourceBuilder.AppendLine("            return false;");
+        sourceBuilder.AppendLine("        }");
         sourceBuilder.AppendLine("    }");
         sourceBuilder.AppendLine();
 
         // Generate Deserialize method
         sourceBuilder.AppendLine("    public void Deserialize(BitReader reader)");
         sourceBuilder.AppendLine("    {");
-        if (packetMaxVersion > 1)
-        {
-            sourceBuilder.AppendLine("        var packetVersion = reader.ReadInt(4);");
-        }
-        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, isWriting: false, packetMaxVersion);
-        sourceBuilder.AppendLine("    }");
+        if (packetMaxVersion > 1) sourceBuilder.AppendLine("        var packetVersion = reader.ReadInt(4);");
 
+        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, false, packetMaxVersion, false);
+        sourceBuilder.AppendLine("    }");
 
 
         // Generate static Read factory method (enables clean nested deserialization)
@@ -130,19 +159,14 @@ public class PacketGenerator : IIncrementalGenerator
         sourceBuilder.AppendLine($"    public static {typeName} Read(BitReader reader)");
         sourceBuilder.AppendLine("    {");
         if (packetMaxVersion > 1)
-        {
             sourceBuilder.AppendLine("        var packetVersion = reader.ReadInt(4);");
-        }
         else
-        {
             sourceBuilder.AppendLine("        var packetVersion = 1;");
-        }
 
         // 1. Declare read variables with defaults
         foreach (var target in targets)
-        {
             sourceBuilder.AppendLine($"        var read_{target.Name} = default({target.Type.ToDisplayString()});");
-        }
+
         sourceBuilder.AppendLine();
 
         // 2. Read variables from bitstream using target-agnostic generator
@@ -150,24 +174,24 @@ public class PacketGenerator : IIncrementalGenerator
         {
             var propVersion = GetPropertyVersion(target.Symbol);
             var propSb = new StringBuilder();
-            GeneratePropertySerialization(context, propSb, target, isWriting: false, $"read_{target.Name}");
+            GeneratePropertySerialization(context, propSb, target, false, $"read_{target.Name}");
 
             if (propVersion > 1)
             {
                 sourceBuilder.AppendLine($"        if (packetVersion >= {propVersion})");
                 sourceBuilder.AppendLine("        {");
                 foreach (var line in propSb.ToString().Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
-                {
                     if (!string.IsNullOrWhiteSpace(line))
                         sourceBuilder.AppendLine("    " + line);
-                }
+
                 sourceBuilder.AppendLine("        }");
             }
             else
             {
-                sourceBuilder.Append(propSb.ToString());
+                sourceBuilder.Append(propSb);
             }
         }
+
         sourceBuilder.AppendLine();
 
         // 3. Resolve constructor
@@ -181,15 +205,13 @@ public class PacketGenerator : IIncrementalGenerator
                 if (i < ctorArgs.Count - 1)
                     sourceBuilder.Append(", ");
             }
+
             sourceBuilder.AppendLine(")");
             sourceBuilder.AppendLine("        {");
             foreach (var target in targets)
-            {
                 if (!ctorArgs.Contains(target) && IsWritablePropertyForInitializer(target.Symbol))
-                {
                     sourceBuilder.AppendLine($"            {target.Name} = read_{target.Name},");
-                }
-            }
+
             sourceBuilder.AppendLine("        };");
         }
         else
@@ -197,12 +219,9 @@ public class PacketGenerator : IIncrementalGenerator
             sourceBuilder.AppendLine($"        var packet = new {typeName}");
             sourceBuilder.AppendLine("        {");
             foreach (var target in targets)
-            {
                 if (IsWritablePropertyForInitializer(target.Symbol))
-                {
                     sourceBuilder.AppendLine($"            {target.Name} = read_{target.Name},");
-                }
-            }
+
             sourceBuilder.AppendLine("        };");
         }
 
@@ -214,30 +233,16 @@ public class PacketGenerator : IIncrementalGenerator
         context.AddSource($"{typeName}.g.cs", SourceText.From(sourceBuilder.ToString(), Encoding.UTF8));
     }
 
-    private class SerializationTarget
-    {
-        public string Name { get; }
-        public ITypeSymbol Type { get; }
-        public ISymbol Symbol { get; }
-
-        public SerializationTarget(string name, ITypeSymbol type, ISymbol symbol)
-        {
-            Name = name;
-            Type = type;
-            Symbol = symbol;
-        }
-    }
-
     private static bool HasIgnoreAttribute(ISymbol symbol)
     {
-        return symbol.GetAttributes().Any(a => 
+        return symbol.GetAttributes().Any(a =>
             a.AttributeClass?.ToDisplayString() == "System.Text.Json.Serialization.JsonIgnoreAttribute" ||
             a.AttributeClass?.ToDisplayString() == "System.Runtime.Serialization.IgnoreDataMemberAttribute");
     }
 
     private static bool HasIncludeAttribute(ISymbol symbol)
     {
-        return symbol.GetAttributes().Any(a => 
+        return symbol.GetAttributes().Any(a =>
             a.AttributeClass?.ToDisplayString() == "System.Runtime.Serialization.DataMemberAttribute");
     }
 
@@ -256,76 +261,65 @@ public class PacketGenerator : IIncrementalGenerator
                 var hasIgnore = HasIgnoreAttribute(p);
 
                 if ((isPublic && !hasIgnore) || (!isPublic && hasInclude))
-                {
                     targets.Add(new SerializationTarget(p.Name, p.Type, p));
-                }
             }
             else if (member is IFieldSymbol f && !f.IsImplicitlyDeclared)
             {
                 var hasInclude = HasIncludeAttribute(f);
-                if (hasInclude)
-                {
-                    targets.Add(new SerializationTarget(f.Name, f.Type, f));
-                }
+                if (hasInclude) targets.Add(new SerializationTarget(f.Name, f.Type, f));
             }
         }
 
         return targets;
     }
 
-    private static void ValidateTargetSafety(SourceProductionContext context, ITypeSymbol typeSymbol, List<SerializationTarget> targets)
+    private static void ValidateTargetSafety(SourceProductionContext context, ITypeSymbol typeSymbol,
+        List<SerializationTarget> targets)
     {
         var namedType = typeSymbol as INamedTypeSymbol;
-        
+
         foreach (var target in targets)
-        {
             if (target.Symbol is IPropertySymbol p)
             {
                 // 1. Check getter accessor
                 if (p.GetMethod == null)
-                {
                     context.ReportDiagnostic(Diagnostic.Create(
                         UnsupportedTypeError,
                         p.Locations.FirstOrDefault(),
                         p.Name,
                         $"Property '{p.Name}' must have a getter accessor to be serialized."));
-                }
 
                 // 2. Check setter/init or constructor match
                 if (p.SetMethod == null)
                 {
                     var hasMatchingCtorParam = false;
                     if (namedType != null)
-                    {
                         foreach (var ctor in namedType.InstanceConstructors)
-                        {
-                            if (ctor.Parameters.Any(param => string.Equals(param.Name, p.Name, StringComparison.OrdinalIgnoreCase)))
+                            if (ctor.Parameters.Any(param =>
+                                    string.Equals(param.Name, p.Name, StringComparison.OrdinalIgnoreCase)))
                             {
                                 hasMatchingCtorParam = true;
                                 break;
                             }
-                        }
-                    }
 
                     if (!hasMatchingCtorParam)
-                    {
                         context.ReportDiagnostic(Diagnostic.Create(
                             UnsupportedTypeError,
                             p.Locations.FirstOrDefault(),
                             p.Name,
                             $"Property '{p.Name}' must have a setter or init accessor, or match a constructor parameter to be deserialized."));
-                    }
                 }
             }
-        }
     }
 
-    private static IMethodSymbol? FindMatchingConstructor(INamedTypeSymbol? typeSymbol, List<SerializationTarget> targets, out List<SerializationTarget> ctorArgs)
+    private static IMethodSymbol? FindMatchingConstructor(INamedTypeSymbol? typeSymbol,
+        List<SerializationTarget> targets, out List<SerializationTarget> ctorArgs)
     {
         ctorArgs = new List<SerializationTarget>();
         if (typeSymbol == null) return null;
         var ctors = typeSymbol.InstanceConstructors
-            .Where(c => c.DeclaredAccessibility == Accessibility.Public || c.DeclaredAccessibility == Accessibility.Internal)
+            .Where(c => c.DeclaredAccessibility == Accessibility.Public ||
+                        c.DeclaredAccessibility == Accessibility.Internal)
             .OrderByDescending(c => c.Parameters.Length);
 
         foreach (var ctor in ctors)
@@ -337,7 +331,8 @@ public class PacketGenerator : IIncrementalGenerator
 
             foreach (var param in ctor.Parameters)
             {
-                var target = targets.FirstOrDefault(t => string.Equals(t.Name, param.Name, StringComparison.OrdinalIgnoreCase));
+                var target = targets.FirstOrDefault(t =>
+                    string.Equals(t.Name, param.Name, StringComparison.OrdinalIgnoreCase));
                 if (target != null)
                 {
                     matchedArgs.Add(target);
@@ -362,54 +357,51 @@ public class PacketGenerator : IIncrementalGenerator
     private static bool IsWritableProperty(ISymbol symbol)
     {
         if (symbol is IFieldSymbol) return true;
-        if (symbol is IPropertySymbol p)
-        {
-            return p.SetMethod != null && !p.SetMethod.IsInitOnly;
-        }
+        if (symbol is IPropertySymbol p) return p.SetMethod != null && !p.SetMethod.IsInitOnly;
+
         return false;
     }
 
     private static bool IsWritablePropertyForInitializer(ISymbol symbol)
     {
         if (symbol is IFieldSymbol) return true;
-        if (symbol is IPropertySymbol p)
-        {
-            return p.SetMethod != null;
-        }
+        if (symbol is IPropertySymbol p) return p.SetMethod != null;
+
         return false;
     }
 
-    private static void GenerateSerializationLoop(SourceProductionContext context, StringBuilder sb, ITypeSymbol typeSymbol, List<SerializationTarget> targets, bool isWriting, int packetMaxVersion)
+    private static void GenerateSerializationLoop(SourceProductionContext context, StringBuilder sb,
+        ITypeSymbol typeSymbol, List<SerializationTarget> targets, bool isWriting, int packetMaxVersion,
+        bool skipValidation)
     {
         foreach (var target in targets)
         {
             var propVersion = GetPropertyVersion(target.Symbol);
             if (propVersion > packetMaxVersion)
-            {
                 context.ReportDiagnostic(Diagnostic.Create(
                     UnsupportedTypeError,
                     target.Symbol.Locations.FirstOrDefault(),
                     target.Name,
                     $"Property version {propVersion} exceeds packet version {packetMaxVersion}."));
-            }
 
             var propSb = new StringBuilder();
-            
+
             if (isWriting)
             {
-                GeneratePropertySerialization(context, propSb, target, isWriting: true, $"this.{target.Name}");
+                GeneratePropertySerialization(context, propSb, target, true, $"this.{target.Name}", skipValidation);
             }
             else
             {
                 if (IsWritableProperty(target.Symbol))
                 {
-                    GeneratePropertySerialization(context, propSb, target, isWriting: false, $"this.{target.Name}");
+                    GeneratePropertySerialization(context, propSb, target, false, $"this.{target.Name}");
                 }
                 else
                 {
-                    propSb.AppendLine($"        // Read and discard init-only / read-only property '{target.Name}' during instance Deserialize");
+                    propSb.AppendLine(
+                        $"        // Read and discard init-only / read-only property '{target.Name}' during instance Deserialize");
                     propSb.AppendLine($"        {target.Type.ToDisplayString()} discard_{target.Name};");
-                    GeneratePropertySerialization(context, propSb, target, isWriting: false, $"discard_{target.Name}");
+                    GeneratePropertySerialization(context, propSb, target, false, $"discard_{target.Name}");
                 }
             }
 
@@ -419,22 +411,21 @@ public class PacketGenerator : IIncrementalGenerator
                 sb.AppendLine("        {");
                 var lines = propSb.ToString().Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
                 foreach (var line in lines)
-                {
                     if (!string.IsNullOrWhiteSpace(line))
                         sb.AppendLine("    " + line);
-                }
+
                 sb.AppendLine("        }");
             }
             else
             {
-                sb.Append(propSb.ToString());
+                sb.Append(propSb);
             }
         }
     }
 
-    private static void GeneratePropertySerialization(SourceProductionContext context, StringBuilder sb, SerializationTarget target, bool isWriting, string targetVarName)
+    private static void GeneratePropertySerialization(SourceProductionContext context, StringBuilder sb,
+        SerializationTarget target, bool isWriting, string targetVarName, bool skipValidation = false)
     {
-        var propName = targetVarName;
         var propType = target.Type;
 
         // Check for custom serialization or bit packet nested properties
@@ -445,39 +436,38 @@ public class PacketGenerator : IIncrementalGenerator
         if (propType.SpecialType == SpecialType.System_Boolean)
         {
             if (isWriting)
-                sb.AppendLine($"        writer.WriteBool({propName});");
+                sb.AppendLine($"        writer.WriteBool({targetVarName});");
             else
-                sb.AppendLine($"        {propName} = reader.ReadBool();");
+                sb.AppendLine($"        {targetVarName} = reader.ReadBool();");
         }
         // 2. Char
         else if (propType.SpecialType == SpecialType.System_Char)
         {
             if (isWriting)
-                sb.AppendLine($"        writer.WriteInt((int){propName}, 16);");
+                sb.AppendLine($"        writer.WriteInt((int){targetVarName}, 16);");
             else
-                sb.AppendLine($"        {propName} = (char)reader.ReadInt(16);");
+                sb.AppendLine($"        {targetVarName} = (char)reader.ReadInt(16);");
         }
         // 3. String
         else if (propType.SpecialType == SpecialType.System_String)
         {
             var maxLen = GetMaxLen(target.Symbol, out var hasConstraint);
-            if (!hasConstraint && isWriting)
-            {
-                ReportWarning(context, target.Symbol);
-            }
+            if (!hasConstraint && isWriting && !skipValidation) ReportWarning(context, target.Symbol);
 
             if (isWriting)
-                sb.AppendLine($"        writer.WriteString({propName}, {maxLen});");
+                sb.AppendLine(
+                    $"        writer.WriteString({targetVarName}, {maxLen}, {CalculateBitsNeeded(maxLen * 4)});");
             else
-                sb.AppendLine($"        {propName} = reader.ReadString({maxLen});");
+                sb.AppendLine(
+                    $"        {targetVarName} = reader.ReadString({maxLen}, {CalculateBitsNeeded(maxLen * 4)});");
         }
         // 4. DateTime
         else if (propType.ToDisplayString() == "System.DateTime")
         {
             if (isWriting)
-                sb.AppendLine($"        writer.WriteDateTime({propName});");
+                sb.AppendLine($"        writer.WriteDateTime({targetVarName});");
             else
-                sb.AppendLine($"        {propName} = reader.ReadDateTime();");
+                sb.AppendLine($"        {targetVarName} = reader.ReadDateTime();");
         }
         // 5. Enum
         else if (propType.TypeKind == TypeKind.Enum)
@@ -488,26 +478,41 @@ public class PacketGenerator : IIncrementalGenerator
                 // Extract range for bounds checking
                 long enumMin = 0, enumMax = 0;
                 var rangeAttr = target.Symbol.GetAttributes()
-                    .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.RangeAttribute");
+                    .FirstOrDefault(a =>
+                        a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.RangeAttribute");
                 if (rangeAttr != null && rangeAttr.ConstructorArguments.Length >= 2)
                 {
-                    try { enumMin = Convert.ToInt64(rangeAttr.ConstructorArguments[0].Value); } catch { }
-                    try { enumMax = Convert.ToInt64(rangeAttr.ConstructorArguments[1].Value); } catch { }
+                    try
+                    {
+                        enumMin = Convert.ToInt64(rangeAttr.ConstructorArguments[0].Value);
+                    }
+                    catch
+                    {
+                    }
+
+                    try
+                    {
+                        enumMax = Convert.ToInt64(rangeAttr.ConstructorArguments[1].Value);
+                    }
+                    catch
+                    {
+                    }
                 }
                 else
                 {
                     foreach (var field in propType.GetMembers().OfType<IFieldSymbol>())
-                    {
                         if (field.HasConstantValue)
                         {
                             var val = Convert.ToInt64(field.ConstantValue);
                             if (val > enumMax) enumMax = val;
                             if (val < enumMin) enumMin = val;
                         }
-                    }
                 }
-                sb.AppendLine($"        if ((int){propName} < {enumMin} || (int){propName} > {enumMax}) throw new ArgumentOutOfRangeException(nameof({propName}), (object){propName}, $\"Enum value must be within [{enumMin}, {enumMax}].\");");
-                sb.AppendLine($"        writer.WriteInt((int){propName}, {bits});");
+
+                if (!skipValidation)
+                    sb.AppendLine(
+                        $"        if ((int){targetVarName} < {enumMin} || (int){targetVarName} > {enumMax}) throw new ArgumentOutOfRangeException(nameof({targetVarName}), (object){targetVarName}, $\"Enum value must be within [{enumMin}, {enumMax}].\");");
+                sb.AppendLine($"        writer.WriteInt((int){targetVarName}, {bits});");
             }
             else
             {
@@ -515,52 +520,61 @@ public class PacketGenerator : IIncrementalGenerator
                 var enumTypeName = propType.ToDisplayString();
                 long maxVal = 0;
                 long defaultVal = 0;
-                bool hasZero = false;
+                var hasZero = false;
                 foreach (var field in enumFields)
                 {
                     var val = Convert.ToInt64(field.ConstantValue);
                     if (val > maxVal) maxVal = val;
                     if (val == 0) hasZero = true;
                 }
+
                 if (!hasZero && enumFields.Count > 0)
                     defaultVal = Convert.ToInt64(enumFields[0].ConstantValue);
                 sb.AppendLine($"        var temp{target.Name} = reader.ReadInt({bits});");
-                sb.AppendLine($"        {propName} = temp{target.Name} <= {maxVal} ? ({enumTypeName})temp{target.Name} : ({enumTypeName}){defaultVal};");
+                sb.AppendLine(
+                    $"        {targetVarName} = temp{target.Name} <= {maxVal} ? ({enumTypeName})temp{target.Name} : ({enumTypeName}){defaultVal};");
             }
         }
         // 6. Floating-point (float, double) with fixed-point quantization
-        else if (propType.SpecialType == SpecialType.System_Single || propType.SpecialType == SpecialType.System_Double)
+        else if (propType.SpecialType is SpecialType.System_Single or SpecialType.System_Double)
         {
-            var isQuantized = GetQuantizationConfig(target.Symbol, out var minVal, out var maxVal, out var decimals, out var scale, out var bits);
-            
+            var isQuantized = GetQuantizationConfig(target.Symbol, out var minVal, out var maxVal, out var decimals,
+                out var scale, out var bits);
+
             if (isQuantized)
             {
                 var castStr = propType.SpecialType == SpecialType.System_Single ? "float" : "double";
                 if (isWriting)
                 {
-                    sb.AppendLine($"        if ({propName} < {minVal} || {propName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({propName}), {propName}, $\"Value must be within [{minVal}, {maxVal}].\");");
-                    sb.AppendLine($"        writer.WriteLong((long)(({propName} - ({minVal})) * {scale}d + 0.5d), {bits});");
+                    if (!skipValidation)
+                        sb.AppendLine(
+                            $"        if ({targetVarName} < {minVal} || {targetVarName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({targetVarName}), {targetVarName}, $\"Value must be within [{minVal}, {maxVal}].\");");
+                    sb.AppendLine(
+                        $"        writer.WriteLong((long)(({targetVarName} - ({minVal})) * {scale}d + 0.5d), {bits});");
                 }
                 else
-                    sb.AppendLine($"        {propName} = ({castStr})((double)reader.ReadLong({bits}) / {scale}d + ({minVal}));");
+                {
+                    sb.AppendLine(
+                        $"        {targetVarName} = ({castStr})((double)reader.ReadLong({bits}) / {scale}d + ({minVal}));");
+                }
             }
             else
             {
                 // Fall back to full float/double representation
                 if (isWriting)
                 {
-                    ReportWarning(context, target.Symbol);
+                    if (!skipValidation) ReportWarning(context, target.Symbol);
                     if (propType.SpecialType == SpecialType.System_Single)
-                        sb.AppendLine($"        writer.WriteFloat({propName});");
+                        sb.AppendLine($"        writer.WriteFloat({targetVarName});");
                     else
-                        sb.AppendLine($"        writer.WriteDouble({propName});");
+                        sb.AppendLine($"        writer.WriteDouble({targetVarName});");
                 }
                 else
                 {
                     if (propType.SpecialType == SpecialType.System_Single)
-                        sb.AppendLine($"        {propName} = reader.ReadFloat();");
+                        sb.AppendLine($"        {targetVarName} = reader.ReadFloat();");
                     else
-                        sb.AppendLine($"        {propName} = reader.ReadDouble();");
+                        sb.AppendLine($"        {targetVarName} = reader.ReadDouble();");
                 }
             }
         }
@@ -568,9 +582,9 @@ public class PacketGenerator : IIncrementalGenerator
         else if (propType.SpecialType == SpecialType.System_Decimal)
         {
             if (isWriting)
-                sb.AppendLine($"        writer.WriteDecimal({propName});");
+                sb.AppendLine($"        writer.WriteDecimal({targetVarName});");
             else
-                sb.AppendLine($"        {propName} = reader.ReadDecimal();");
+                sb.AppendLine($"        {targetVarName} = reader.ReadDecimal();");
         }
         // 6.6. Native integers (nint, nuint, IntPtr, UIntPtr)
         else if (propType.ToDisplayString() == "nint" || propType.ToDisplayString() == "System.IntPtr")
@@ -580,18 +594,22 @@ public class PacketGenerator : IIncrementalGenerator
             {
                 if (hasConstraint)
                 {
-                    sb.AppendLine($"        if ({propName} < {minVal} || {propName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({propName}), {propName}, $\"Value must be within [{minVal}, {maxVal}].\");");
-                    sb.AppendLine($"        writer.WriteLong((long)({propName} - ({minVal})), {bits});");
+                    if (!skipValidation)
+                        sb.AppendLine(
+                            $"        if ({targetVarName} < {minVal} || {targetVarName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({targetVarName}), {targetVarName}, $\"Value must be within [{minVal}, {maxVal}].\");");
+                    sb.AppendLine($"        writer.WriteLong((long)({targetVarName} - ({minVal})), {bits});");
                 }
                 else
-                    sb.AppendLine($"        writer.WriteLong((long){propName}, {bits});");
+                {
+                    sb.AppendLine($"        writer.WriteLong((long){targetVarName}, {bits});");
+                }
             }
             else
             {
                 if (hasConstraint)
-                    sb.AppendLine($"        {propName} = (nint)(reader.ReadLong({bits}) + ({minVal}));");
+                    sb.AppendLine($"        {targetVarName} = (nint)(reader.ReadLong({bits}) + ({minVal}));");
                 else
-                    sb.AppendLine($"        {propName} = (nint)reader.ReadLong({bits});");
+                    sb.AppendLine($"        {targetVarName} = (nint)reader.ReadLong({bits});");
             }
         }
         else if (propType.ToDisplayString() == "nuint" || propType.ToDisplayString() == "System.UIntPtr")
@@ -601,36 +619,43 @@ public class PacketGenerator : IIncrementalGenerator
             {
                 if (hasConstraint)
                 {
-                    sb.AppendLine($"        if ({propName} < {minVal} || {propName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({propName}), {propName}, $\"Value must be within [{minVal}, {maxVal}].\");");
-                    sb.AppendLine($"        writer.WriteULong((ulong)({propName} - ({minVal})), {bits});");
+                    if (!skipValidation)
+                        sb.AppendLine(
+                            $"        if ({targetVarName} < {minVal} || {targetVarName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({targetVarName}), {targetVarName}, $\"Value must be within [{minVal}, {maxVal}].\");");
+                    sb.AppendLine($"        writer.WriteULong((ulong)({targetVarName} - ({minVal})), {bits});");
                 }
                 else
-                    sb.AppendLine($"        writer.WriteULong((ulong){propName}, {bits});");
+                {
+                    sb.AppendLine($"        writer.WriteULong((ulong){targetVarName}, {bits});");
+                }
             }
             else
             {
                 if (hasConstraint)
-                    sb.AppendLine($"        {propName} = (nuint)(reader.ReadULong({bits}) + ({minVal}));");
+                    sb.AppendLine($"        {targetVarName} = (nuint)(reader.ReadULong({bits}) + ({minVal}));");
                 else
-                    sb.AppendLine($"        {propName} = (nuint)reader.ReadULong({bits});");
+                    sb.AppendLine($"        {targetVarName} = (nuint)reader.ReadULong({bits});");
             }
         }
         // 6.7. Interface Types
         else if (propType.TypeKind == TypeKind.Interface)
         {
-            var implementsBitSerializable = propType.AllInterfaces.Any(i => i.ToDisplayString() == "BitPack.IBitSerializable") || propType.ToDisplayString() == "BitPack.IBitSerializable";
+            var implementsBitSerializable =
+                propType.AllInterfaces.Any(i => i.ToDisplayString() == "BitPack.IBitSerializable") ||
+                propType.ToDisplayString() == "BitPack.IBitSerializable";
             if (implementsBitSerializable)
             {
                 if (isWriting)
-                    sb.AppendLine($"        {propName}.Serialize(writer);");
+                    sb.AppendLine($"        {targetVarName}.Serialize(writer);");
                 else
-                    sb.AppendLine($"        {propName}.Deserialize(reader);");
+                    sb.AppendLine($"        {targetVarName}.Deserialize(reader);");
             }
             else
             {
-                if (isWriting)
+                if (isWriting && !skipValidation)
                     ReportError(context, target.Symbol);
-                sb.AppendLine($"        // ERROR: Interface property '{propName}' of type '{propType.ToDisplayString()}' must implement IBitSerializable.");
+                sb.AppendLine(
+                    $"        // ERROR: Interface property '{targetVarName}' of type '{propType.ToDisplayString()}' must implement IBitSerializable.");
             }
         }
         // 7. Nested Packets or Custom Value Objects
@@ -638,113 +663,113 @@ public class PacketGenerator : IIncrementalGenerator
         {
             if (isWriting)
             {
-                sb.AppendLine($"        {propName}.Serialize(writer);");
+                sb.AppendLine($"        {targetVarName}.Serialize(writer);");
             }
             else
             {
                 if (isBitPacket)
                 {
-                    sb.AppendLine($"        {propName} = {propType.ToDisplayString()}.Read(reader);");
+                    sb.AppendLine($"        {targetVarName} = {propType.ToDisplayString()}.Read(reader);");
                 }
                 else if (staticMethodName != null)
                 {
-                    sb.AppendLine($"        {propName} = {propType.ToDisplayString()}.{staticMethodName}(reader);");
+                    sb.AppendLine(
+                        $"        {targetVarName} = {propType.ToDisplayString()}.{staticMethodName}(reader);");
                 }
                 else
                 {
-                    sb.AppendLine($"        {propName} = new {propType.ToDisplayString()}();");
-                    sb.AppendLine($"        {propName}.Deserialize(reader);");
+                    sb.AppendLine($"        {targetVarName} = new {propType.ToDisplayString()}();");
+                    sb.AppendLine($"        {targetVarName}.Deserialize(reader);");
                 }
             }
         }
         // 8. Unsigned integers (uint, ulong)
-        else if (propType.SpecialType == SpecialType.System_UInt32 || propType.SpecialType == SpecialType.System_UInt64)
+        else if (propType.SpecialType is SpecialType.System_UInt32 or SpecialType.System_UInt64)
         {
             var bits = GetNumericBits(propType, target.Symbol, out var hasConstraint, out var minVal, out var maxVal);
-            if (!hasConstraint && isWriting)
-            {
-                ReportWarning(context, target.Symbol);
-            }
+            if (!hasConstraint && isWriting && !skipValidation) ReportWarning(context, target.Symbol);
 
             if (isWriting)
             {
                 if (hasConstraint)
                 {
-                    sb.AppendLine($"        if ({propName} < {minVal} || {propName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({propName}), {propName}, $\"Value must be within [{minVal}, {maxVal}].\");");
-                    sb.AppendLine($"        writer.WriteULong((ulong)({propName} - ({minVal})), {bits});");
+                    if (!skipValidation)
+                        sb.AppendLine(
+                            $"        if ({targetVarName} < {minVal} || {targetVarName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({targetVarName}), {targetVarName}, $\"Value must be within [{minVal}, {maxVal}].\");");
+                    sb.AppendLine($"        writer.WriteULong((ulong)({targetVarName} - ({minVal})), {bits});");
                 }
                 else
-                    sb.AppendLine($"        writer.WriteULong((ulong){propName}, {bits});");
+                {
+                    sb.AppendLine($"        writer.WriteULong((ulong){targetVarName}, {bits});");
+                }
             }
             else
             {
                 if (hasConstraint)
-                    sb.AppendLine($"        {propName} = ({propType.ToDisplayString()})(reader.ReadULong({bits}) + ({minVal}));");
+                    sb.AppendLine(
+                        $"        {targetVarName} = ({propType.ToDisplayString()})(reader.ReadULong({bits}) + ({minVal}));");
                 else
-                    sb.AppendLine($"        {propName} = ({propType.ToDisplayString()})reader.ReadULong({bits});");
+                    sb.AppendLine($"        {targetVarName} = ({propType.ToDisplayString()})reader.ReadULong({bits});");
             }
         }
         // 9. Signed or small integers (sbyte, byte, short, ushort, int, long)
-        else if (propType.SpecialType == SpecialType.System_SByte ||
-                 propType.SpecialType == SpecialType.System_Byte ||
-                 propType.SpecialType == SpecialType.System_Int16 ||
-                 propType.SpecialType == SpecialType.System_UInt16 ||
-                 propType.SpecialType == SpecialType.System_Int32 ||
-                 propType.SpecialType == SpecialType.System_Int64)
+        else if (propType.SpecialType is SpecialType.System_SByte or SpecialType.System_Byte or SpecialType.System_Int16
+                 or SpecialType.System_UInt16 or SpecialType.System_Int32 or SpecialType.System_Int64)
         {
             var bits = GetNumericBits(propType, target.Symbol, out var hasConstraint, out var minVal, out var maxVal);
-            if (!hasConstraint && isWriting)
-            {
-                ReportWarning(context, target.Symbol);
-            }
+            if (!hasConstraint && isWriting && !skipValidation) ReportWarning(context, target.Symbol);
 
             if (isWriting)
             {
                 if (hasConstraint)
                 {
-                    sb.AppendLine($"        if ({propName} < {minVal} || {propName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({propName}), {propName}, $\"Value must be within [{minVal}, {maxVal}].\");");
-                    sb.AppendLine($"        writer.WriteLong((long)({propName} - ({minVal})), {bits});");
+                    if (!skipValidation)
+                        sb.AppendLine(
+                            $"        if ({targetVarName} < {minVal} || {targetVarName} > {maxVal}) throw new ArgumentOutOfRangeException(nameof({targetVarName}), {targetVarName}, $\"Value must be within [{minVal}, {maxVal}].\");");
+                    sb.AppendLine($"        writer.WriteLong((long)({targetVarName} - ({minVal})), {bits});");
                 }
                 else
-                    sb.AppendLine($"        writer.WriteLong((long){propName}, {bits});");
+                {
+                    sb.AppendLine($"        writer.WriteLong((long){targetVarName}, {bits});");
+                }
             }
             else
             {
                 if (hasConstraint)
-                    sb.AppendLine($"        {propName} = ({propType.ToDisplayString()})(reader.ReadLong({bits}) + ({minVal}));");
+                    sb.AppendLine(
+                        $"        {targetVarName} = ({propType.ToDisplayString()})(reader.ReadLong({bits}) + ({minVal}));");
                 else
-                    sb.AppendLine($"        {propName} = ({propType.ToDisplayString()})reader.ReadLong({bits});");
+                    sb.AppendLine($"        {targetVarName} = ({propType.ToDisplayString()})reader.ReadLong({bits});");
             }
         }
         // 10. Unsupported complex structures (raise build-time Error BP0001)
         else
         {
-            if (isWriting)
-            {
-                ReportError(context, target.Symbol);
-            }
-            sb.AppendLine($"        // ERROR: Property '{propName}' of type '{propType.ToDisplayString()}' is not packable.");
+            if (isWriting && !skipValidation) ReportError(context, target.Symbol);
+
+            sb.AppendLine(
+                $"        // ERROR: Property '{targetVarName}' of type '{propType.ToDisplayString()}' is not packable.");
         }
     }
 
     private static bool IsBitPacketType(ITypeSymbol type)
     {
-        return type.GetAttributes().Any(a => 
+        return type.GetAttributes().Any(a =>
             a.AttributeClass?.ToDisplayString() == "BitPack.BitPacketAttribute");
     }
 
     private static bool ExposesCustomSerialization(ITypeSymbol type, out string? staticMethodName)
     {
         var members = type.GetMembers();
-        var hasSerialize = members.OfType<IMethodSymbol>().Any(m => 
-            m.Name == "Serialize" && 
-            m.Parameters.Length == 1 && 
+        var hasSerialize = members.OfType<IMethodSymbol>().Any(m =>
+            m.Name == "Serialize" &&
+            m.Parameters.Length == 1 &&
             m.Parameters[0].Type.ToDisplayString() == "BitPack.BitWriter");
 
-        var staticDeserializer = members.OfType<IMethodSymbol>().FirstOrDefault(m => 
-            m.IsStatic && 
-            (m.Name == "Deserialize" || m.Name == "Read") && 
-            m.Parameters.Length == 1 && 
+        var staticDeserializer = members.OfType<IMethodSymbol>().FirstOrDefault(m =>
+            m.IsStatic &&
+            (m.Name == "Deserialize" || m.Name == "Read") &&
+            m.Parameters.Length == 1 &&
             m.Parameters[0].Type.ToDisplayString() == "BitPack.BitReader" &&
             SymbolEqualityComparer.Default.Equals(m.ReturnType, type));
 
@@ -752,7 +777,8 @@ public class PacketGenerator : IIncrementalGenerator
         return hasSerialize;
     }
 
-    private static bool GetQuantizationConfig(ISymbol symbol, out double minVal, out double maxVal, out int decimals, out double scale, out int bits)
+    private static bool GetQuantizationConfig(ISymbol symbol, out double minVal, out double maxVal, out int decimals,
+        out double scale, out int bits)
     {
         minVal = 0;
         maxVal = 0;
@@ -761,13 +787,14 @@ public class PacketGenerator : IIncrementalGenerator
         bits = 32;
 
         var rangeAttr = symbol.GetAttributes()
-            .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.RangeAttribute");
+            .FirstOrDefault(a =>
+                a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.RangeAttribute");
 
         var precisionAttr = symbol.GetAttributes()
             .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "BitPack.PrecisionAttribute");
 
-        if (rangeAttr != null && precisionAttr != null && rangeAttr.ConstructorArguments.Length >= 2 && precisionAttr.ConstructorArguments.Length > 0)
-        {
+        if (rangeAttr != null && precisionAttr != null && rangeAttr.ConstructorArguments.Length >= 2 &&
+            precisionAttr.ConstructorArguments.Length > 0)
             try
             {
                 minVal = Convert.ToDouble(rangeAttr.ConstructorArguments[0].Value);
@@ -779,67 +806,68 @@ public class PacketGenerator : IIncrementalGenerator
                 bits = (int)Math.Ceiling(Math.Log(rangeSize + 1, 2));
                 return true;
             }
-            catch { }
-        }
+            catch
+            {
+            }
 
         return false;
     }
 
     private static int GetEnumBits(ITypeSymbol enumType, ISymbol symbol)
     {
-
         var rangeAttr = symbol.GetAttributes()
-            .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.RangeAttribute");
+            .FirstOrDefault(a =>
+                a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.RangeAttribute");
 
         if (rangeAttr != null && rangeAttr.ConstructorArguments.Length >= 2)
-        {
             try
             {
                 var maxValRange = Convert.ToInt32(rangeAttr.ConstructorArguments[1].Value);
                 return CalculateBitsNeeded(maxValRange);
             }
-            catch { }
-        }
+            catch
+            {
+            }
 
         var maxEnumVal = 1;
         foreach (var member in enumType.GetMembers().OfType<IFieldSymbol>())
-        {
             if (member.HasConstantValue)
-            {
                 try
                 {
                     var val = Convert.ToInt32(member.ConstantValue);
                     if (val > maxEnumVal) maxEnumVal = val;
                 }
-                catch { }
-            }
-        }
+                catch
+                {
+                }
 
         return CalculateBitsNeeded(maxEnumVal);
     }
 
-    private static int GetNumericBits(ITypeSymbol propType, ISymbol symbol, out bool hasConstraint, out long minVal, out long maxVal)
+    private static int GetNumericBits(ITypeSymbol propType, ISymbol symbol, out bool hasConstraint, out long minVal,
+        out long maxVal)
     {
         hasConstraint = false;
         minVal = 0;
         maxVal = 0;
 
         var rangeAttr = symbol.GetAttributes()
-            .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.RangeAttribute");
+            .FirstOrDefault(a =>
+                a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.RangeAttribute");
 
         if (rangeAttr != null && rangeAttr.ConstructorArguments.Length >= 2)
-        {
             try
             {
                 hasConstraint = true;
                 minVal = Convert.ToInt64(rangeAttr.ConstructorArguments[0].Value);
                 maxVal = Convert.ToInt64(rangeAttr.ConstructorArguments[1].Value);
-                
+
                 var size = maxVal - minVal;
                 return CalculateBitsNeeded((int)size);
             }
-            catch { }
-        }
+            catch
+            {
+            }
 
         return propType.SpecialType switch
         {
@@ -860,18 +888,22 @@ public class PacketGenerator : IIncrementalGenerator
         hasConstraint = false;
 
         var maxLengthAttr = symbol.GetAttributes()
-            .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.MaxLengthAttribute");
+            .FirstOrDefault(a =>
+                a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.MaxLengthAttribute");
 
-        if (maxLengthAttr != null && maxLengthAttr.ConstructorArguments.Length > 0 && maxLengthAttr.ConstructorArguments[0].Value is int maxLenVal)
+        if (maxLengthAttr != null && maxLengthAttr.ConstructorArguments.Length > 0 &&
+            maxLengthAttr.ConstructorArguments[0].Value is int maxLenVal)
         {
             hasConstraint = true;
             return maxLenVal;
         }
 
         var stringLengthAttr = symbol.GetAttributes()
-            .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.StringLengthAttribute");
+            .FirstOrDefault(a =>
+                a.AttributeClass?.ToDisplayString() == "System.ComponentModel.DataAnnotations.StringLengthAttribute");
 
-        if (stringLengthAttr != null && stringLengthAttr.ConstructorArguments.Length > 0 && stringLengthAttr.ConstructorArguments[0].Value is int strLenVal)
+        if (stringLengthAttr != null && stringLengthAttr.ConstructorArguments.Length > 0 &&
+            stringLengthAttr.ConstructorArguments[0].Value is int strLenVal)
         {
             hasConstraint = true;
             return strLenVal;
@@ -886,13 +918,127 @@ public class PacketGenerator : IIncrementalGenerator
         return (int)Math.Ceiling(Math.Log(maxValue + 1, 2));
     }
 
+    private static int GetPacketMaxBits(ITypeSymbol typeSymbol, List<SerializationTarget> targets, int packetMaxVersion)
+    {
+        return GetPacketMaxBits(typeSymbol, targets, packetMaxVersion, new HashSet<string>());
+    }
+
+    private static int GetPacketMaxBits(ITypeSymbol typeSymbol, List<SerializationTarget> targets, int packetMaxVersion,
+        HashSet<string> seenTypes)
+    {
+        var typeKey = typeSymbol.ToDisplayString();
+        if (!seenTypes.Add(typeKey)) return -1;
+
+        var totalBits = packetMaxVersion > 1 ? 4 : 0;
+        foreach (var target in targets)
+        {
+            if (GetPropertyVersion(target.Symbol) > packetMaxVersion) continue;
+
+            var targetBits = GetTargetMaxBits(target, seenTypes);
+            if (targetBits < 0)
+            {
+                seenTypes.Remove(typeKey);
+                return -1;
+            }
+
+            totalBits += targetBits;
+        }
+
+        seenTypes.Remove(typeKey);
+        return totalBits;
+    }
+
+    private static int GetTargetMaxBits(SerializationTarget target, HashSet<string> seenTypes)
+    {
+        var propType = target.Type;
+
+        if (propType.SpecialType == SpecialType.System_Boolean) return 1;
+        if (propType.SpecialType == SpecialType.System_Char) return 16;
+        if (propType.SpecialType == SpecialType.System_String)
+        {
+            var maxLen = GetMaxLen(target.Symbol, out _);
+            var maxBytes = maxLen * 4;
+            return CalculateBitsNeeded(maxBytes) + maxBytes * 8;
+        }
+        if (propType.ToDisplayString() == "System.DateTime") return 64;
+        if (propType.TypeKind == TypeKind.Enum) return GetEnumBits(propType, target.Symbol);
+        if (propType.SpecialType is SpecialType.System_Single or SpecialType.System_Double)
+        {
+            return GetQuantizationConfig(target.Symbol, out _, out _, out _, out _, out var bits)
+                ? bits
+                : propType.SpecialType == SpecialType.System_Single ? 32 : 64;
+        }
+        if (propType.SpecialType == SpecialType.System_Decimal) return 128;
+        if (propType.ToDisplayString() == "nint" || propType.ToDisplayString() == "System.IntPtr" ||
+            propType.ToDisplayString() == "nuint" || propType.ToDisplayString() == "System.UIntPtr")
+            return GetNumericBits(propType, target.Symbol, out _, out _, out _);
+        if (propType.TypeKind == TypeKind.Interface) return -1;
+        if (IsBitPacketType(propType))
+            return GetPacketMaxBits(propType, GetSerializationTargets(propType), GetPacketVersion(propType), seenTypes);
+        if (ExposesCustomSerialization(propType, out _)) return -1;
+        if (propType.SpecialType is SpecialType.System_UInt32 or SpecialType.System_UInt64 or SpecialType.System_SByte
+            or SpecialType.System_Byte or SpecialType.System_Int16 or SpecialType.System_UInt16 or SpecialType.System_Int32
+            or SpecialType.System_Int64)
+            return GetNumericBits(propType, target.Symbol, out _, out _, out _);
+
+        return -1;
+    }
+
+    private static string BuildLayoutManifest(ITypeSymbol typeSymbol, List<SerializationTarget> targets, int packetMaxVersion,
+        int maxBits, int maxBytes)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"type={typeSymbol.ToDisplayString()}");
+        sb.AppendLine($"version={packetMaxVersion}");
+        sb.AppendLine($"maxBits={maxBits}");
+        sb.AppendLine($"maxBytes={maxBytes}");
+        foreach (var target in targets)
+        {
+            var targetBits = GetTargetMaxBits(target, new HashSet<string> { typeSymbol.ToDisplayString() });
+            sb.AppendLine(
+                $"field={target.Name};type={target.Type.ToDisplayString()};since={GetPropertyVersion(target.Symbol)};bits={targetBits}");
+        }
+
+        return sb.ToString();
+    }
+
+    private static uint ComputeFnv1A32(string value)
+    {
+        unchecked
+        {
+            const uint offsetBasis = 2166136261u;
+            const uint prime = 16777619u;
+            var hash = offsetBasis;
+            foreach (var b in Encoding.UTF8.GetBytes(value))
+            {
+                hash ^= b;
+                hash *= prime;
+            }
+
+            return hash;
+        }
+    }
+
+    private static string EscapeStringLiteral(string value)
+    {
+        return value
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\r", "\\r")
+            .Replace("\n", "\\n");
+    }
+
     private static void ReportError(SourceProductionContext context, ISymbol prop)
     {
         context.ReportDiagnostic(Diagnostic.Create(
             UnsupportedTypeError,
             prop.Locations.FirstOrDefault(),
             prop.Name,
-            prop is IPropertySymbol p ? p.Type.ToDisplayString() : (prop is IFieldSymbol f ? f.Type.ToDisplayString() : "")));
+            prop is IPropertySymbol p
+                ? p.Type.ToDisplayString()
+                : prop is IFieldSymbol f
+                    ? f.Type.ToDisplayString()
+                    : ""));
     }
 
     private static void ReportWarning(SourceProductionContext context, ISymbol prop)
@@ -901,17 +1047,20 @@ public class PacketGenerator : IIncrementalGenerator
             UnconstrainedPropertyWarning,
             prop.Locations.FirstOrDefault(),
             prop.Name,
-            prop is IPropertySymbol p ? p.Type.ToDisplayString() : (prop is IFieldSymbol f ? f.Type.ToDisplayString() : "")));
+            prop is IPropertySymbol p
+                ? p.Type.ToDisplayString()
+                : prop is IFieldSymbol f
+                    ? f.Type.ToDisplayString()
+                    : ""));
     }
 
     private static int GetPacketVersion(ITypeSymbol typeSymbol)
     {
         var attr = typeSymbol.GetAttributes()
             .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "BitPack.BitPacketAttribute");
-        if (attr != null && attr.ConstructorArguments.Length > 0 && attr.ConstructorArguments[0].Value is int v)
-        {
-            return v;
-        }
+        if (attr != null && attr.ConstructorArguments.Length > 0 &&
+            attr.ConstructorArguments[0].Value is int v) return v;
+
         return 1;
     }
 
@@ -919,10 +1068,23 @@ public class PacketGenerator : IIncrementalGenerator
     {
         var attr = symbol.GetAttributes()
             .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "BitPack.SinceVersionAttribute");
-        if (attr != null && attr.ConstructorArguments.Length > 0 && attr.ConstructorArguments[0].Value is int v)
-        {
-            return v;
-        }
+        if (attr != null && attr.ConstructorArguments.Length > 0 &&
+            attr.ConstructorArguments[0].Value is int v) return v;
+
         return 1;
+    }
+
+    private class SerializationTarget
+    {
+        public SerializationTarget(string name, ITypeSymbol type, ISymbol symbol)
+        {
+            Name = name;
+            Type = type;
+            Symbol = symbol;
+        }
+
+        public string Name { get; }
+        public ITypeSymbol Type { get; }
+        public ISymbol Symbol { get; }
     }
 }
