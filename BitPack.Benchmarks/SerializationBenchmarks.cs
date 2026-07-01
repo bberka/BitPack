@@ -1,13 +1,15 @@
 using System;
 using System.Buffers;
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BenchmarkDotNet.Attributes;
-using BitPack;
-using MessagePack;
+using BenchmarkDotNet.Engines;
 using MemoryPack;
+using MessagePack;
+using MessagePack.Resolvers;
 using ProtoBuf;
 
 namespace BitPack.Benchmarks;
@@ -15,49 +17,44 @@ namespace BitPack.Benchmarks;
 [MemoryDiagnoser]
 public class SerializationBenchmarks
 {
+    private readonly Consumer _consumer = new Consumer();
+
     private byte[] _simpleBitBuffer = null!;
     private byte[] _simpleJsonBuffer = null!;
     private byte[] _simpleMsgPackBuffer = null!;
-    private byte[] _simpleNbMsgPackBuffer = null!;
     private byte[] _simpleMemPackBuffer = null!;
     private byte[] _simpleProtoBufBuffer = null!;
+    private int _simpleJsonLen;
+    private int _simpleMsgPackLen;
+    private int _simpleMemPackLen;
+    private int _simpleProtoBufLen;
+    private SimplePacket _simplePacket;
+    private BitWriter _simpleBitWriter = null!;
+    private BitReader _simpleBitReader = null!;
+    private ArrayBufferWriter<byte> _simpleMemoryPackWriter = null!;
+    private ArrayBufferWriter<byte> _simpleMessagePackWriter = null!;
 
     private byte[] _complexBitBuffer = null!;
     private byte[] _complexJsonBuffer = null!;
     private byte[] _complexMsgPackBuffer = null!;
-    private byte[] _complexNbMsgPackBuffer = null!;
     private byte[] _complexMemPackBuffer = null!;
     private byte[] _complexProtoBufBuffer = null!;
-    
-    private int _simpleJsonLen;
-    private int _simpleMsgPackLen;
-    private int _simpleNbMsgPackLen;
-    private int _simpleMemPackLen;
-    private int _simpleProtoBufLen;
-
     private int _complexJsonLen;
     private int _complexMsgPackLen;
-    private int _complexNbMsgPackLen;
     private int _complexMemPackLen;
     private int _complexProtoBufLen;
-
-    private SimplePacket _simplePacket;
     private ComplexPacket _complexPacket;
-    
-    private BitWriter _simpleBitWriter = null!;
-    private BitReader _simpleBitReader = null!;
-
     private BitWriter _complexBitWriter = null!;
     private BitReader _complexBitReader = null!;
-    
-    private Nerdbank.MessagePack.MessagePackSerializer _nbSerializer = null!;
+    private ArrayBufferWriter<byte> _complexMemoryPackWriter = null!;
+    private ArrayBufferWriter<byte> _complexMessagePackWriter = null!;
 
     [GlobalSetup]
     public void Setup()
     {
         try
         {
-            System.Diagnostics.Process.GetCurrentProcess().PriorityClass = System.Diagnostics.ProcessPriorityClass.High;
+            Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
             Console.WriteLine("[Setup] Set process priority to High.");
         }
         catch (Exception ex)
@@ -68,14 +65,12 @@ public class SerializationBenchmarks
         _simpleBitBuffer = new byte[512];
         _simpleJsonBuffer = new byte[512];
         _simpleMsgPackBuffer = new byte[512];
-        _simpleNbMsgPackBuffer = new byte[512];
         _simpleMemPackBuffer = new byte[512];
         _simpleProtoBufBuffer = new byte[512];
 
         _complexBitBuffer = new byte[1024];
         _complexJsonBuffer = new byte[1024];
         _complexMsgPackBuffer = new byte[1024];
-        _complexNbMsgPackBuffer = new byte[1024];
         _complexMemPackBuffer = new byte[1024];
         _complexProtoBufBuffer = new byte[1024];
 
@@ -113,13 +108,13 @@ public class SerializationBenchmarks
 
         _simpleBitWriter = new BitWriter(_simpleBitBuffer);
         _simpleBitReader = new BitReader(_simpleBitBuffer);
-
         _complexBitWriter = new BitWriter(_complexBitBuffer);
         _complexBitReader = new BitReader(_complexBitBuffer);
+        _simpleMemoryPackWriter = new ArrayBufferWriter<byte>(512);
+        _simpleMessagePackWriter = new ArrayBufferWriter<byte>(512);
+        _complexMemoryPackWriter = new ArrayBufferWriter<byte>(1024);
+        _complexMessagePackWriter = new ArrayBufferWriter<byte>(1024);
 
-        _nbSerializer = new Nerdbank.MessagePack.MessagePackSerializer();
-        
-        // --- 1. Simple Packet Setup ---
         _simpleBitWriter.Reset();
         _simplePacket.Serialize(_simpleBitWriter);
         var simpleBitSize = _simpleBitWriter.BytesWritten;
@@ -131,13 +126,9 @@ public class SerializationBenchmarks
             _simpleJsonLen = (int)ms.Position;
         }
 
-        var sMpBytes = MessagePackSerializer.Serialize(_simplePacket, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+        var sMpBytes = MessagePackSerializer.Serialize(_simplePacket, ContractlessStandardResolver.Options);
         Array.Copy(sMpBytes, _simpleMsgPackBuffer, sMpBytes.Length);
         _simpleMsgPackLen = sMpBytes.Length;
-
-        var sNbBytes = _nbSerializer.Serialize(_simplePacket);
-        Array.Copy(sNbBytes, _simpleNbMsgPackBuffer, sNbBytes.Length);
-        _simpleNbMsgPackLen = sNbBytes.Length;
 
         var sMemPackBytes = MemoryPackSerializer.Serialize(_simplePacket);
         Array.Copy(sMemPackBytes, _simpleMemPackBuffer, sMemPackBytes.Length);
@@ -149,7 +140,6 @@ public class SerializationBenchmarks
             _simpleProtoBufLen = (int)ms.Position;
         }
 
-        // --- 2. Complex Packet Setup ---
         _complexBitWriter.Reset();
         _complexPacket.Serialize(_complexBitWriter);
         var complexBitSize = _complexBitWriter.BytesWritten;
@@ -161,13 +151,9 @@ public class SerializationBenchmarks
             _complexJsonLen = (int)ms.Position;
         }
 
-        var cMpBytes = MessagePackSerializer.Serialize(_complexPacket, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+        var cMpBytes = MessagePackSerializer.Serialize(_complexPacket, ContractlessStandardResolver.Options);
         Array.Copy(cMpBytes, _complexMsgPackBuffer, cMpBytes.Length);
         _complexMsgPackLen = cMpBytes.Length;
-
-        var cNbBytes = _nbSerializer.Serialize(_complexPacket);
-        Array.Copy(cNbBytes, _complexNbMsgPackBuffer, cNbBytes.Length);
-        _complexNbMsgPackLen = cNbBytes.Length;
 
         var cMemPackBytes = MemoryPackSerializer.Serialize(_complexPacket);
         Array.Copy(cMemPackBytes, _complexMemPackBuffer, cMemPackBytes.Length);
@@ -184,7 +170,6 @@ public class SerializationBenchmarks
         Console.WriteLine($"[Setup] Simple MessagePack Size: {_simpleMsgPackLen} bytes.");
         Console.WriteLine($"[Setup] Simple MemoryPack Size: {_simpleMemPackLen} bytes.");
         Console.WriteLine($"[Setup] Simple ProtoBuf Size: {_simpleProtoBufLen} bytes.");
-
         Console.WriteLine($"[Setup] Complex BitPack Size: {complexBitSize} bytes.");
         Console.WriteLine($"[Setup] Complex JSON Size: {_complexJsonLen} bytes.");
         Console.WriteLine($"[Setup] Complex MessagePack Size: {_complexMsgPackLen} bytes.");
@@ -192,12 +177,9 @@ public class SerializationBenchmarks
         Console.WriteLine($"[Setup] Complex ProtoBuf Size: {_complexProtoBufLen} bytes.");
     }
 
-    // ==========================================
-    // SECTION A: SIMPLE PACKET BENCHMARKS
-    // ==========================================
-
     [Benchmark]
-    public int Serialize_Simple_BitPack()
+    [BenchmarkCategory("Simple", "Serialize", "ReusableBuffer")]
+    public int Serialize_Simple_BitPack_ReusableBuffer()
     {
         _simpleBitWriter.Reset();
         _simplePacket.Serialize(_simpleBitWriter);
@@ -205,14 +187,52 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public int Deserialize_Simple_BitPack()
+    [BenchmarkCategory("Simple", "Serialize", "FreshBuffer")]
+    public int Serialize_Simple_BitPack_FreshBuffer()
     {
-        _simpleBitReader.Reset();
-        return SimplePacket.Read(_simpleBitReader).Value1;
+        var buffer = new byte[SimplePacket.MaxBytes];
+        var writer = new BitWriter(buffer);
+        _simplePacket.Serialize(writer);
+        return writer.BytesWritten;
     }
 
     [Benchmark]
-    public int Serialize_Simple_MemoryPack()
+    [BenchmarkCategory("Simple", "Serialize", "PooledBuffer")]
+    public int Serialize_Simple_BitPack_PooledBuffer()
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(SimplePacket.MaxBytes);
+        try
+        {
+            var writer = new BitWriter(buffer);
+            _simplePacket.Serialize(writer);
+            return writer.BytesWritten;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Simple", "Deserialize")]
+    public void Deserialize_Simple_BitPack()
+    {
+        _simpleBitReader.Reset();
+        _consumer.Consume(SimplePacket.Read(_simpleBitReader));
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Simple", "Serialize", "ReusableWriter")]
+    public int Serialize_Simple_MemoryPack_ReusableWriter()
+    {
+        _simpleMemoryPackWriter.Clear();
+        MemoryPackSerializer.Serialize(_simpleMemoryPackWriter, _simplePacket);
+        return _simpleMemoryPackWriter.WrittenCount;
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Simple", "Serialize", "FreshWriter")]
+    public int Serialize_Simple_MemoryPack_FreshWriter()
     {
         var buffer = new ArrayBufferWriter<byte>();
         MemoryPackSerializer.Serialize(buffer, _simplePacket);
@@ -220,66 +240,96 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public int Deserialize_Simple_MemoryPack()
+    [BenchmarkCategory("Simple", "Deserialize")]
+    public void Deserialize_Simple_MemoryPack()
     {
         var readSpan = new ReadOnlySpan<byte>(_simpleMemPackBuffer, 0, _simpleMemPackLen);
-        return MemoryPackSerializer.Deserialize<SimplePacket>(readSpan).Value1;
+        _consumer.Consume(MemoryPackSerializer.Deserialize<SimplePacket>(readSpan));
     }
 
     [Benchmark]
-    public int Serialize_Simple_MessagePack()
+    [BenchmarkCategory("Simple", "Serialize", "ReusableWriter")]
+    public int Serialize_Simple_MessagePack_ReusableWriter()
+    {
+        _simpleMessagePackWriter.Clear();
+        MessagePackSerializer.Serialize(_simpleMessagePackWriter, _simplePacket, ContractlessStandardResolver.Options);
+        return _simpleMessagePackWriter.WrittenCount;
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Simple", "Serialize", "FreshWriter")]
+    public int Serialize_Simple_MessagePack_FreshWriter()
     {
         var buffer = new ArrayBufferWriter<byte>();
-        MessagePackSerializer.Serialize(buffer, _simplePacket, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+        MessagePackSerializer.Serialize(buffer, _simplePacket, ContractlessStandardResolver.Options);
         return buffer.WrittenCount;
     }
 
     [Benchmark]
-    public int Deserialize_Simple_MessagePack()
+    [BenchmarkCategory("Simple", "Deserialize")]
+    public void Deserialize_Simple_MessagePack()
     {
         var readSpan = new ReadOnlyMemory<byte>(_simpleMsgPackBuffer, 0, _simpleMsgPackLen);
-        return MessagePackSerializer.Deserialize<SimplePacket>(readSpan, MessagePack.Resolvers.ContractlessStandardResolver.Options).Value1;
+        _consumer.Consume(MessagePackSerializer.Deserialize<SimplePacket>(readSpan, ContractlessStandardResolver.Options));
     }
 
     [Benchmark]
-    public int Serialize_Simple_ProtoBuf()
+    [BenchmarkCategory("Simple", "Serialize", "ReusableBuffer")]
+    public int Serialize_Simple_ProtoBuf_ReusableBuffer()
     {
         using var ms = new MemoryStream(_simpleProtoBufBuffer);
-        ms.Position = 0;
         Serializer.Serialize(ms, _simplePacket);
         return (int)ms.Position;
     }
 
     [Benchmark]
-    public int Deserialize_Simple_ProtoBuf()
+    [BenchmarkCategory("Simple", "Serialize", "FreshBuffer")]
+    public int Serialize_Simple_ProtoBuf_FreshBuffer()
     {
-        using var ms = new MemoryStream(_simpleProtoBufBuffer, 0, _simpleProtoBufLen);
-        return Serializer.Deserialize<SimplePacket>(ms).Value1;
+        using var ms = new MemoryStream();
+        Serializer.Serialize(ms, _simplePacket);
+        return (int)ms.Position;
     }
 
     [Benchmark]
-    public int Serialize_Simple_JsonContext()
+    [BenchmarkCategory("Simple", "Deserialize")]
+    public void Deserialize_Simple_ProtoBuf()
+    {
+        using var ms = new MemoryStream(_simpleProtoBufBuffer, 0, _simpleProtoBufLen);
+        _consumer.Consume(Serializer.Deserialize<SimplePacket>(ms));
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Simple", "Serialize", "ReusableBuffer")]
+    public int Serialize_Simple_JsonContext_ReusableBuffer()
     {
         using var ms = new MemoryStream(_simpleJsonBuffer);
-        ms.Position = 0;
         using var writer = new Utf8JsonWriter(ms);
         JsonSerializer.Serialize(writer, _simplePacket, BenchmarkPacketJsonContext.Default.SimplePacket);
         return (int)ms.Position;
     }
 
     [Benchmark]
-    public int Deserialize_Simple_JsonContext()
+    [BenchmarkCategory("Simple", "Serialize", "FreshBuffer")]
+    public int Serialize_Simple_JsonContext_FreshBuffer()
     {
-        var utf8Span = new ReadOnlySpan<byte>(_simpleJsonBuffer, 0, _simpleJsonLen);
-        return JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.SimplePacket)!.Value1;
+        using var ms = new MemoryStream();
+        using var writer = new Utf8JsonWriter(ms);
+        JsonSerializer.Serialize(writer, _simplePacket, BenchmarkPacketJsonContext.Default.SimplePacket);
+        return (int)ms.Position;
     }
 
-    // ==========================================
-    // SECTION B: COMPLEX PACKET BENCHMARKS
-    // ==========================================
+    [Benchmark]
+    [BenchmarkCategory("Simple", "Deserialize")]
+    public void Deserialize_Simple_JsonContext()
+    {
+        var utf8Span = new ReadOnlySpan<byte>(_simpleJsonBuffer, 0, _simpleJsonLen);
+        _consumer.Consume(JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.SimplePacket)!);
+    }
 
     [Benchmark]
-    public int Serialize_Complex_BitPack()
+    [BenchmarkCategory("Complex", "Serialize", "ReusableBuffer")]
+    public int Serialize_Complex_BitPack_ReusableBuffer()
     {
         _complexBitWriter.Reset();
         _complexPacket.Serialize(_complexBitWriter);
@@ -287,14 +337,52 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public int Deserialize_Complex_BitPack()
+    [BenchmarkCategory("Complex", "Serialize", "FreshBuffer")]
+    public int Serialize_Complex_BitPack_FreshBuffer()
     {
-        _complexBitReader.Reset();
-        return ComplexPacket.Read(_complexBitReader).Value1;
+        var buffer = new byte[ComplexPacket.MaxBytes];
+        var writer = new BitWriter(buffer);
+        _complexPacket.Serialize(writer);
+        return writer.BytesWritten;
     }
 
     [Benchmark]
-    public int Serialize_Complex_MemoryPack()
+    [BenchmarkCategory("Complex", "Serialize", "PooledBuffer")]
+    public int Serialize_Complex_BitPack_PooledBuffer()
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(ComplexPacket.MaxBytes);
+        try
+        {
+            var writer = new BitWriter(buffer);
+            _complexPacket.Serialize(writer);
+            return writer.BytesWritten;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Complex", "Deserialize")]
+    public void Deserialize_Complex_BitPack()
+    {
+        _complexBitReader.Reset();
+        _consumer.Consume(ComplexPacket.Read(_complexBitReader));
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Complex", "Serialize", "ReusableWriter")]
+    public int Serialize_Complex_MemoryPack_ReusableWriter()
+    {
+        _complexMemoryPackWriter.Clear();
+        MemoryPackSerializer.Serialize(_complexMemoryPackWriter, _complexPacket);
+        return _complexMemoryPackWriter.WrittenCount;
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Complex", "Serialize", "FreshWriter")]
+    public int Serialize_Complex_MemoryPack_FreshWriter()
     {
         var buffer = new ArrayBufferWriter<byte>();
         MemoryPackSerializer.Serialize(buffer, _complexPacket);
@@ -302,64 +390,96 @@ public class SerializationBenchmarks
     }
 
     [Benchmark]
-    public int Deserialize_Complex_MemoryPack()
+    [BenchmarkCategory("Complex", "Deserialize")]
+    public void Deserialize_Complex_MemoryPack()
     {
         var readSpan = new ReadOnlySpan<byte>(_complexMemPackBuffer, 0, _complexMemPackLen);
-        return MemoryPackSerializer.Deserialize<ComplexPacket>(readSpan).Value1;
+        _consumer.Consume(MemoryPackSerializer.Deserialize<ComplexPacket>(readSpan));
     }
 
     [Benchmark]
-    public int Serialize_Complex_MessagePack()
+    [BenchmarkCategory("Complex", "Serialize", "ReusableWriter")]
+    public int Serialize_Complex_MessagePack_ReusableWriter()
+    {
+        _complexMessagePackWriter.Clear();
+        MessagePackSerializer.Serialize(_complexMessagePackWriter, _complexPacket, ContractlessStandardResolver.Options);
+        return _complexMessagePackWriter.WrittenCount;
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Complex", "Serialize", "FreshWriter")]
+    public int Serialize_Complex_MessagePack_FreshWriter()
     {
         var buffer = new ArrayBufferWriter<byte>();
-        MessagePackSerializer.Serialize(buffer, _complexPacket, MessagePack.Resolvers.ContractlessStandardResolver.Options);
+        MessagePackSerializer.Serialize(buffer, _complexPacket, ContractlessStandardResolver.Options);
         return buffer.WrittenCount;
     }
 
     [Benchmark]
-    public int Deserialize_Complex_MessagePack()
+    [BenchmarkCategory("Complex", "Deserialize")]
+    public void Deserialize_Complex_MessagePack()
     {
         var readSpan = new ReadOnlyMemory<byte>(_complexMsgPackBuffer, 0, _complexMsgPackLen);
-        return MessagePackSerializer.Deserialize<ComplexPacket>(readSpan, MessagePack.Resolvers.ContractlessStandardResolver.Options).Value1;
+        _consumer.Consume(MessagePackSerializer.Deserialize<ComplexPacket>(readSpan, ContractlessStandardResolver.Options));
     }
 
     [Benchmark]
-    public int Serialize_Complex_ProtoBuf()
+    [BenchmarkCategory("Complex", "Serialize", "ReusableBuffer")]
+    public int Serialize_Complex_ProtoBuf_ReusableBuffer()
     {
         using var ms = new MemoryStream(_complexProtoBufBuffer);
-        ms.Position = 0;
         Serializer.Serialize(ms, _complexPacket);
         return (int)ms.Position;
     }
 
     [Benchmark]
-    public int Deserialize_Complex_ProtoBuf()
+    [BenchmarkCategory("Complex", "Serialize", "FreshBuffer")]
+    public int Serialize_Complex_ProtoBuf_FreshBuffer()
     {
-        using var ms = new MemoryStream(_complexProtoBufBuffer, 0, _complexProtoBufLen);
-        return Serializer.Deserialize<ComplexPacket>(ms).Value1;
+        using var ms = new MemoryStream();
+        Serializer.Serialize(ms, _complexPacket);
+        return (int)ms.Position;
     }
 
     [Benchmark]
-    public int Serialize_Complex_JsonContext()
+    [BenchmarkCategory("Complex", "Deserialize")]
+    public void Deserialize_Complex_ProtoBuf()
+    {
+        using var ms = new MemoryStream(_complexProtoBufBuffer, 0, _complexProtoBufLen);
+        _consumer.Consume(Serializer.Deserialize<ComplexPacket>(ms));
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Complex", "Serialize", "ReusableBuffer")]
+    public int Serialize_Complex_JsonContext_ReusableBuffer()
     {
         using var ms = new MemoryStream(_complexJsonBuffer);
-        ms.Position = 0;
         using var writer = new Utf8JsonWriter(ms);
         JsonSerializer.Serialize(writer, _complexPacket, BenchmarkPacketJsonContext.Default.ComplexPacket);
         return (int)ms.Position;
     }
 
     [Benchmark]
-    public int Deserialize_Complex_JsonContext()
+    [BenchmarkCategory("Complex", "Serialize", "FreshBuffer")]
+    public int Serialize_Complex_JsonContext_FreshBuffer()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new Utf8JsonWriter(ms);
+        JsonSerializer.Serialize(writer, _complexPacket, BenchmarkPacketJsonContext.Default.ComplexPacket);
+        return (int)ms.Position;
+    }
+
+    [Benchmark]
+    [BenchmarkCategory("Complex", "Deserialize")]
+    public void Deserialize_Complex_JsonContext()
     {
         var utf8Span = new ReadOnlySpan<byte>(_complexJsonBuffer, 0, _complexJsonLen);
-        return JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.ComplexPacket)!.Value1;
+        _consumer.Consume(JsonSerializer.Deserialize(utf8Span, BenchmarkPacketJsonContext.Default.ComplexPacket)!);
     }
 }
 
 [BitPacket]
 [MessagePackObject]
-[PolyType.GenerateShape]
 [MemoryPackable]
 [ProtoContract]
 public partial record struct SimplePacket
@@ -380,7 +500,6 @@ public partial record struct SimplePacket
 
 [BitPacket]
 [MessagePackObject]
-[PolyType.GenerateShape]
 [MemoryPackable]
 [ProtoContract]
 public partial record struct ComplexPacket
@@ -401,7 +520,6 @@ public partial record struct ComplexPacket
 
 [BitPacket]
 [MessagePackObject]
-[PolyType.GenerateShape]
 [MemoryPackable]
 [ProtoContract]
 public partial record struct InnerSnapshot

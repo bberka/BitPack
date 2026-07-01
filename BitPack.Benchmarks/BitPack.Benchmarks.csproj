@@ -1,24 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>disable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.13.12" />
-    <PackageReference Include="MessagePack" Version="2.5.187" />
-    <PackageReference Include="Nerdbank.MessagePack" Version="0.5.13-beta" />
-    <PackageReference Include="PolyType" Version="0.33.0" />
-    <PackageReference Include="MemoryPack" Version="1.21.1" />
-    <PackageReference Include="protobuf-net" Version="3.2.30" />
-  </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="BenchmarkDotNet" Version="0.15.8"/>
+        <PackageReference Include="MessagePack" Version="3.1.7"/>
+        <PackageReference Include="MemoryPack" Version="1.21.4"/>
+        <PackageReference Include="protobuf-net" Version="3.2.56"/>
+    </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\BitPack\BitPack.csproj" />
-    <ProjectReference Include="..\BitPack.Generator\BitPack.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-  </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\BitPack\BitPack.csproj"/>
+        <ProjectReference Include="..\BitPack.Generator\BitPack.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false"/>
+    </ItemGroup>
 
 </Project>
