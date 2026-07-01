@@ -43,6 +43,14 @@ public class PacketGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         true);
 
+    private static readonly DiagnosticDescriptor MathCodecError = new(
+        "BP0005",
+        "Invalid Game Math Codec",
+        "Property or field '{0}' has invalid game math codec: {1}",
+        "BitPackGenerator",
+        DiagnosticSeverity.Error,
+        true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var packetDeclarations = context.SyntaxProvider
@@ -380,9 +388,11 @@ public class PacketGenerator : IIncrementalGenerator
                             UnsupportedTypeError,
                             p.Locations.FirstOrDefault(),
                             p.Name,
-                            $"Property '{p.Name}' must have a setter or init accessor, or match a constructor parameter to be deserialized."));
+                        $"Property '{p.Name}' must have a setter or init accessor, or match a constructor parameter to be deserialized."));
                 }
             }
+
+        foreach (var target in targets) ValidateMathCodecSafety(context, target);
 
         var hasAnyFieldKey = targets.Any(t => t.FieldKey.HasValue);
         if (!hasAnyFieldKey) return;
@@ -413,8 +423,46 @@ public class PacketGenerator : IIncrementalGenerator
                     BitFieldKeyError,
                     target.Symbol.Locations.FirstOrDefault(),
                     target.Name,
-                    $"key {duplicateGroup.Key} is already used by another serializable member."));
+                $"key {duplicateGroup.Key} is already used by another serializable member."));
         }
+    }
+
+    private static void ValidateMathCodecSafety(SourceProductionContext context, SerializationTarget target)
+    {
+        var codecCount = 0;
+        if (HasAngleAttribute(target.Symbol)) codecCount++;
+        if (HasVectorRangeAttribute(target.Symbol)) codecCount++;
+        if (HasQuaternionSmallestThreeAttribute(target.Symbol)) codecCount++;
+
+        if (codecCount == 0) return;
+        if (codecCount > 1)
+        {
+            ReportMathCodecError(context, target, "only one game math codec attribute can be applied to a member.");
+            return;
+        }
+
+        var effectiveType = target.Type is IArrayTypeSymbol arrayType ? arrayType.ElementType : target.Type;
+
+        if (HasAngleAttribute(target.Symbol) &&
+            !TryGetAngleConfig(effectiveType, target.Symbol, out _, out var angleError))
+            ReportMathCodecError(context, target, angleError);
+
+        if (HasVectorRangeAttribute(target.Symbol) &&
+            !TryGetVectorRangeConfig(effectiveType, target.Symbol, out _, out var vectorError))
+            ReportMathCodecError(context, target, vectorError);
+
+        if (HasQuaternionSmallestThreeAttribute(target.Symbol) &&
+            !TryGetQuaternionSmallestThreeConfig(effectiveType, target.Symbol, out _, out var quaternionError))
+            ReportMathCodecError(context, target, quaternionError);
+    }
+
+    private static void ReportMathCodecError(SourceProductionContext context, SerializationTarget target, string message)
+    {
+        context.ReportDiagnostic(Diagnostic.Create(
+            MathCodecError,
+            target.Symbol.Locations.FirstOrDefault(),
+            target.Name,
+            message));
     }
 
     private static IMethodSymbol? FindMatchingConstructor(INamedTypeSymbol? typeSymbol,
@@ -536,6 +584,24 @@ public class PacketGenerator : IIncrementalGenerator
         if (propType is IArrayTypeSymbol arrayType)
         {
             GenerateArraySerialization(context, sb, target, arrayType, isWriting, targetVarName, skipValidation);
+            return;
+        }
+
+        if (TryGetAngleConfig(propType, target.Symbol, out var angleConfig, out _))
+        {
+            GenerateAngleSerialization(sb, propType, target, angleConfig, isWriting, targetVarName, skipValidation);
+            return;
+        }
+
+        if (TryGetVectorRangeConfig(propType, target.Symbol, out var vectorConfig, out _))
+        {
+            GenerateVectorRangeSerialization(sb, propType, target, vectorConfig, isWriting, targetVarName, skipValidation);
+            return;
+        }
+
+        if (TryGetQuaternionSmallestThreeConfig(propType, target.Symbol, out var quaternionConfig, out _))
+        {
+            GenerateQuaternionSmallestThreeSerialization(sb, target, quaternionConfig, isWriting, targetVarName, skipValidation);
             return;
         }
 
@@ -863,6 +929,143 @@ public class PacketGenerator : IIncrementalGenerator
         }
     }
 
+    private static void GenerateAngleSerialization(StringBuilder sb, ITypeSymbol propType, SerializationTarget target,
+        AngleConfig config, bool isWriting, string targetVarName, bool skipValidation)
+    {
+        var suffix = SanitizeIdentifier(target.Name);
+        var scale = 1L << config.Bits;
+        var maxEncoded = scale - 1;
+        var cast = propType.SpecialType == SpecialType.System_Single ? "float" : "double";
+
+        if (isWriting)
+        {
+            if (!skipValidation)
+                sb.AppendLine(
+                    $"        if ({targetVarName} < 0d || {targetVarName} >= 360d) throw new ArgumentOutOfRangeException(nameof({targetVarName}), {targetVarName}, \"Angle must be in the range [0, 360).\");");
+            sb.AppendLine(
+                $"        var encodedAngle_{suffix} = (long)Math.Floor(((double){targetVarName} * {scale}d / 360d) + 0.5d);");
+            sb.AppendLine($"        if (encodedAngle_{suffix} > {maxEncoded}L) encodedAngle_{suffix} = {maxEncoded}L;");
+            sb.AppendLine($"        writer.WriteLong(encodedAngle_{suffix}, {config.Bits});");
+        }
+        else
+        {
+            sb.AppendLine($"        {targetVarName} = ({cast})((double)reader.ReadLong({config.Bits}) * 360d / {scale}d);");
+        }
+    }
+
+    private static void GenerateVectorRangeSerialization(StringBuilder sb, ITypeSymbol propType,
+        SerializationTarget target, VectorRangeConfig config, bool isWriting, string targetVarName, bool skipValidation)
+    {
+        var suffix = SanitizeIdentifier(target.Name);
+        var isVector3 = propType.ToDisplayString() == "System.Numerics.Vector3";
+
+        if (isWriting)
+        {
+            GenerateVectorComponentWrite(sb, targetVarName, "X", suffix, config, skipValidation);
+            GenerateVectorComponentWrite(sb, targetVarName, "Y", suffix, config, skipValidation);
+            if (isVector3) GenerateVectorComponentWrite(sb, targetVarName, "Z", suffix, config, skipValidation);
+        }
+        else
+        {
+            GenerateVectorComponentRead(sb, "X", suffix, config);
+            GenerateVectorComponentRead(sb, "Y", suffix, config);
+            if (isVector3) GenerateVectorComponentRead(sb, "Z", suffix, config);
+            sb.AppendLine(isVector3
+                ? $"        {targetVarName} = new System.Numerics.Vector3((float)decoded_{suffix}_X, (float)decoded_{suffix}_Y, (float)decoded_{suffix}_Z);"
+                : $"        {targetVarName} = new System.Numerics.Vector2((float)decoded_{suffix}_X, (float)decoded_{suffix}_Y);");
+        }
+    }
+
+    private static void GenerateVectorComponentWrite(StringBuilder sb, string targetVarName, string component,
+        string suffix, VectorRangeConfig config, bool skipValidation)
+    {
+        var componentAccess = $"{targetVarName}.{component}";
+        if (!skipValidation)
+            sb.AppendLine(
+                $"        if ({componentAccess} < {config.Min}d || {componentAccess} > {config.Max}d) throw new ArgumentOutOfRangeException(nameof({targetVarName}), {componentAccess}, \"Vector component must be within [{config.Min}, {config.Max}].\");");
+        sb.AppendLine(
+            $"        writer.WriteLong((long)(((double){componentAccess} - ({config.Min}d)) * {config.Scale}d + 0.5d), {config.Bits});");
+    }
+
+    private static void GenerateVectorComponentRead(StringBuilder sb, string component, string suffix,
+        VectorRangeConfig config)
+    {
+        sb.AppendLine(
+            $"        var decoded_{suffix}_{component} = (double)reader.ReadLong({config.Bits}) / {config.Scale}d + ({config.Min}d);");
+    }
+
+    private static void GenerateQuaternionSmallestThreeSerialization(StringBuilder sb, SerializationTarget target,
+        QuaternionSmallestThreeConfig config, bool isWriting, string targetVarName, bool skipValidation)
+    {
+        var suffix = SanitizeIdentifier(target.Name);
+        var maxEncoded = (1L << config.BitsPerComponent) - 1;
+        const string limit = "0.7071067811865476d";
+
+        if (isWriting)
+        {
+            sb.AppendLine($"        var q_{suffix} = {targetVarName};");
+            sb.AppendLine(
+                $"        var lenSq_{suffix} = (double)q_{suffix}.X * q_{suffix}.X + (double)q_{suffix}.Y * q_{suffix}.Y + (double)q_{suffix}.Z * q_{suffix}.Z + (double)q_{suffix}.W * q_{suffix}.W;");
+            sb.AppendLine(
+                $"        if (lenSq_{suffix} <= 0d) throw new ArgumentOutOfRangeException(nameof({targetVarName}), {targetVarName}, \"Quaternion length must be greater than zero.\");");
+            sb.AppendLine($"        var invLen_{suffix} = 1d / Math.Sqrt(lenSq_{suffix});");
+            sb.AppendLine($"        var qx_{suffix} = q_{suffix}.X * invLen_{suffix};");
+            sb.AppendLine($"        var qy_{suffix} = q_{suffix}.Y * invLen_{suffix};");
+            sb.AppendLine($"        var qz_{suffix} = q_{suffix}.Z * invLen_{suffix};");
+            sb.AppendLine($"        var qw_{suffix} = q_{suffix}.W * invLen_{suffix};");
+            sb.AppendLine($"        var largestIndex_{suffix} = 0;");
+            sb.AppendLine($"        var largestAbs_{suffix} = Math.Abs(qx_{suffix});");
+            sb.AppendLine($"        if (Math.Abs(qy_{suffix}) > largestAbs_{suffix}) {{ largestIndex_{suffix} = 1; largestAbs_{suffix} = Math.Abs(qy_{suffix}); }}");
+            sb.AppendLine($"        if (Math.Abs(qz_{suffix}) > largestAbs_{suffix}) {{ largestIndex_{suffix} = 2; largestAbs_{suffix} = Math.Abs(qz_{suffix}); }}");
+            sb.AppendLine($"        if (Math.Abs(qw_{suffix}) > largestAbs_{suffix}) largestIndex_{suffix} = 3;");
+            sb.AppendLine($"        var largestValue_{suffix} = largestIndex_{suffix} == 0 ? qx_{suffix} : largestIndex_{suffix} == 1 ? qy_{suffix} : largestIndex_{suffix} == 2 ? qz_{suffix} : qw_{suffix};");
+            sb.AppendLine($"        if (largestValue_{suffix} < 0d) {{ qx_{suffix} = -qx_{suffix}; qy_{suffix} = -qy_{suffix}; qz_{suffix} = -qz_{suffix}; qw_{suffix} = -qw_{suffix}; }}");
+            sb.AppendLine($"        writer.WriteInt(largestIndex_{suffix}, 2);");
+            GenerateQuaternionComponentWrite(sb, "x", suffix, config, maxEncoded, limit);
+            GenerateQuaternionComponentWrite(sb, "y", suffix, config, maxEncoded, limit);
+            GenerateQuaternionComponentWrite(sb, "z", suffix, config, maxEncoded, limit);
+            GenerateQuaternionComponentWrite(sb, "w", suffix, config, maxEncoded, limit);
+        }
+        else
+        {
+            sb.AppendLine($"        var largestIndex_{suffix} = reader.ReadInt(2);");
+            sb.AppendLine($"        var qx_{suffix} = 0d;");
+            sb.AppendLine($"        var qy_{suffix} = 0d;");
+            sb.AppendLine($"        var qz_{suffix} = 0d;");
+            sb.AppendLine($"        var qw_{suffix} = 0d;");
+            GenerateQuaternionComponentRead(sb, "x", suffix, config, maxEncoded, limit);
+            GenerateQuaternionComponentRead(sb, "y", suffix, config, maxEncoded, limit);
+            GenerateQuaternionComponentRead(sb, "z", suffix, config, maxEncoded, limit);
+            GenerateQuaternionComponentRead(sb, "w", suffix, config, maxEncoded, limit);
+            sb.AppendLine($"        var omitted_{suffix} = Math.Sqrt(Math.Max(0d, 1d - (qx_{suffix} * qx_{suffix} + qy_{suffix} * qy_{suffix} + qz_{suffix} * qz_{suffix} + qw_{suffix} * qw_{suffix})));");
+            sb.AppendLine($"        if (largestIndex_{suffix} == 0) qx_{suffix} = omitted_{suffix};");
+            sb.AppendLine($"        else if (largestIndex_{suffix} == 1) qy_{suffix} = omitted_{suffix};");
+            sb.AppendLine($"        else if (largestIndex_{suffix} == 2) qz_{suffix} = omitted_{suffix};");
+            sb.AppendLine($"        else qw_{suffix} = omitted_{suffix};");
+            sb.AppendLine($"        {targetVarName} = new System.Numerics.Quaternion((float)qx_{suffix}, (float)qy_{suffix}, (float)qz_{suffix}, (float)qw_{suffix});");
+        }
+    }
+
+    private static void GenerateQuaternionComponentWrite(StringBuilder sb, string component, string suffix,
+        QuaternionSmallestThreeConfig config, long maxEncoded, string limit)
+    {
+        var index = component == "x" ? 0 : component == "y" ? 1 : component == "z" ? 2 : 3;
+        sb.AppendLine($"        if (largestIndex_{suffix} != {index})");
+        sb.AppendLine("        {");
+        sb.AppendLine($"        var encodedQ_{suffix}_{component} = (long)((((q{component}_{suffix} + {limit}) / (2d * {limit})) * {maxEncoded}d) + 0.5d);");
+        sb.AppendLine($"        if (encodedQ_{suffix}_{component} < 0L) encodedQ_{suffix}_{component} = 0L;");
+        sb.AppendLine($"        else if (encodedQ_{suffix}_{component} > {maxEncoded}L) encodedQ_{suffix}_{component} = {maxEncoded}L;");
+        sb.AppendLine($"        writer.WriteLong(encodedQ_{suffix}_{component}, {config.BitsPerComponent});");
+        sb.AppendLine("        }");
+    }
+
+    private static void GenerateQuaternionComponentRead(StringBuilder sb, string component, string suffix,
+        QuaternionSmallestThreeConfig config, long maxEncoded, string limit)
+    {
+        var index = component == "x" ? 0 : component == "y" ? 1 : component == "z" ? 2 : 3;
+        sb.AppendLine($"        if (largestIndex_{suffix} != {index}) q{component}_{suffix} = (double)reader.ReadLong({config.BitsPerComponent}) / {maxEncoded}d * (2d * {limit}) - {limit};");
+    }
+
     private static void GenerateArraySerialization(SourceProductionContext context, StringBuilder sb,
         SerializationTarget target, IArrayTypeSymbol arrayType, bool isWriting, string targetVarName,
         bool skipValidation)
@@ -1016,6 +1219,123 @@ public class PacketGenerator : IIncrementalGenerator
         }
 
         return false;
+    }
+
+    private static bool HasAngleAttribute(ISymbol symbol)
+    {
+        return symbol.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == "BitPack.AngleAttribute");
+    }
+
+    private static bool HasVectorRangeAttribute(ISymbol symbol)
+    {
+        return symbol.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == "BitPack.VectorRangeAttribute");
+    }
+
+    private static bool HasQuaternionSmallestThreeAttribute(ISymbol symbol)
+    {
+        return symbol.GetAttributes()
+            .Any(a => a.AttributeClass?.ToDisplayString() == "BitPack.QuaternionSmallestThreeAttribute");
+    }
+
+    private static bool TryGetAngleConfig(ITypeSymbol type, ISymbol symbol, out AngleConfig config, out string error)
+    {
+        config = default;
+        error = string.Empty;
+        var attr = symbol.GetAttributes()
+            .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "BitPack.AngleAttribute");
+        if (attr == null) return false;
+
+        if (type.SpecialType is not (SpecialType.System_Single or SpecialType.System_Double))
+        {
+            error = "[Angle] can only be applied to float or double values.";
+            return false;
+        }
+
+        var bits = attr.ConstructorArguments.Length > 0 && attr.ConstructorArguments[0].Value is int value ? value : 16;
+        if (bits is < 1 or > 30)
+        {
+            error = "[Angle] bits must be between 1 and 30.";
+            return false;
+        }
+
+        config = new AngleConfig(bits);
+        return true;
+    }
+
+    private static bool TryGetVectorRangeConfig(ITypeSymbol type, ISymbol symbol, out VectorRangeConfig config,
+        out string error)
+    {
+        config = default;
+        error = string.Empty;
+        var attr = symbol.GetAttributes()
+            .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "BitPack.VectorRangeAttribute");
+        if (attr == null) return false;
+
+        var typeName = type.ToDisplayString();
+        if (typeName is not ("System.Numerics.Vector2" or "System.Numerics.Vector3"))
+        {
+            error = "[VectorRange] can only be applied to System.Numerics.Vector2 or Vector3 values.";
+            return false;
+        }
+
+        if (attr.ConstructorArguments.Length < 3 || attr.ConstructorArguments[0].Value == null ||
+            attr.ConstructorArguments[1].Value == null || attr.ConstructorArguments[2].Value is not int decimals)
+        {
+            error = "[VectorRange] requires minimum, maximum, and decimals constructor arguments.";
+            return false;
+        }
+
+        var min = Convert.ToDouble(attr.ConstructorArguments[0].Value);
+        var max = Convert.ToDouble(attr.ConstructorArguments[1].Value);
+        if (max <= min)
+        {
+            error = "[VectorRange] maximum must be greater than minimum.";
+            return false;
+        }
+
+        if (decimals < 0)
+        {
+            error = "[VectorRange] decimals must be zero or greater.";
+            return false;
+        }
+
+        var scale = Math.Pow(10, decimals);
+        var rangeSize = (max - min) * scale;
+        var bits = CalculateBitsNeeded((int)Math.Ceiling(rangeSize));
+        if (bits > 62)
+        {
+            error = "[VectorRange] requires too many bits per component.";
+            return false;
+        }
+
+        config = new VectorRangeConfig(min, max, decimals, scale, bits);
+        return true;
+    }
+
+    private static bool TryGetQuaternionSmallestThreeConfig(ITypeSymbol type, ISymbol symbol,
+        out QuaternionSmallestThreeConfig config, out string error)
+    {
+        config = default;
+        error = string.Empty;
+        var attr = symbol.GetAttributes()
+            .FirstOrDefault(a => a.AttributeClass?.ToDisplayString() == "BitPack.QuaternionSmallestThreeAttribute");
+        if (attr == null) return false;
+
+        if (type.ToDisplayString() != "System.Numerics.Quaternion")
+        {
+            error = "[QuaternionSmallestThree] can only be applied to System.Numerics.Quaternion values.";
+            return false;
+        }
+
+        var bits = attr.ConstructorArguments.Length > 0 && attr.ConstructorArguments[0].Value is int value ? value : 16;
+        if (bits is < 2 or > 30)
+        {
+            error = "[QuaternionSmallestThree] bits per component must be between 2 and 30.";
+            return false;
+        }
+
+        config = new QuaternionSmallestThreeConfig(bits);
+        return true;
     }
 
     private static bool TryGetMaxLength(ISymbol symbol, out int maxLength)
@@ -1234,6 +1554,11 @@ public class PacketGenerator : IIncrementalGenerator
         var propType = target.Type;
 
         if (propType is IArrayTypeSymbol arrayType) return GetArrayMaxBits(target, arrayType, seenTypes);
+        if (TryGetAngleConfig(propType, target.Symbol, out var angleConfig, out _)) return angleConfig.Bits;
+        if (TryGetVectorRangeConfig(propType, target.Symbol, out var vectorConfig, out _))
+            return (propType.ToDisplayString() == "System.Numerics.Vector3" ? 3 : 2) * vectorConfig.Bits;
+        if (TryGetQuaternionSmallestThreeConfig(propType, target.Symbol, out var quaternionConfig, out _))
+            return 2 + 3 * quaternionConfig.BitsPerComponent;
         if (propType.SpecialType == SpecialType.System_Boolean) return 1;
         if (propType.SpecialType == SpecialType.System_Char) return 16;
         if (propType.SpecialType == SpecialType.System_String)
@@ -1301,6 +1626,8 @@ public class PacketGenerator : IIncrementalGenerator
         var line =
             $"field={target.Name};type={target.Type.ToDisplayString()};declaringType={target.Symbol.ContainingType.ToDisplayString()};key={target.FieldKey?.ToString() ?? ""};since={GetPropertyVersion(target.Symbol)}";
 
+        line += GetCodecManifest(target.Type, target.Symbol);
+
         if (target.Type is IArrayTypeSymbol arrayType && TryGetArrayConfig(target.Symbol, arrayType, out var config, out _))
         {
             var elementTarget = new SerializationTarget($"{target.Name}Element", arrayType.ElementType, target.Symbol, null);
@@ -1310,6 +1637,19 @@ public class PacketGenerator : IIncrementalGenerator
         }
 
         return $"{line};bits={targetBits}";
+    }
+
+    private static string GetCodecManifest(ITypeSymbol type, ISymbol symbol)
+    {
+        var effectiveType = type is IArrayTypeSymbol arrayType ? arrayType.ElementType : type;
+        if (TryGetAngleConfig(effectiveType, symbol, out var angleConfig, out _))
+            return $";codec=angle;codecBits={angleConfig.Bits}";
+        if (TryGetVectorRangeConfig(effectiveType, symbol, out var vectorConfig, out _))
+            return $";codec=vectorRange;min={vectorConfig.Min};max={vectorConfig.Max};decimals={vectorConfig.Decimals};componentBits={vectorConfig.Bits}";
+        if (TryGetQuaternionSmallestThreeConfig(effectiveType, symbol, out var quaternionConfig, out _))
+            return $";codec=quaternionSmallestThree;componentBits={quaternionConfig.BitsPerComponent}";
+
+        return string.Empty;
     }
 
     private static uint ComputeFnv1A32(string value)
@@ -1412,5 +1752,43 @@ public class PacketGenerator : IIncrementalGenerator
         public bool IsFixed { get; }
         public int Count { get; }
         public int LengthBits { get; }
+    }
+
+    private readonly struct AngleConfig
+    {
+        public AngleConfig(int bits)
+        {
+            Bits = bits;
+        }
+
+        public int Bits { get; }
+    }
+
+    private readonly struct VectorRangeConfig
+    {
+        public VectorRangeConfig(double min, double max, int decimals, double scale, int bits)
+        {
+            Min = min;
+            Max = max;
+            Decimals = decimals;
+            Scale = scale;
+            Bits = bits;
+        }
+
+        public double Min { get; }
+        public double Max { get; }
+        public int Decimals { get; }
+        public double Scale { get; }
+        public int Bits { get; }
+    }
+
+    private readonly struct QuaternionSmallestThreeConfig
+    {
+        public QuaternionSmallestThreeConfig(int bitsPerComponent)
+        {
+            BitsPerComponent = bitsPerComponent;
+        }
+
+        public int BitsPerComponent { get; }
     }
 }

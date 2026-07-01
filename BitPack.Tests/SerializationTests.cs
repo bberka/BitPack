@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Numerics;
 using System.Runtime.Serialization;
 using System.Text.Json.Serialization;
 using BitPack.Generator;
@@ -110,6 +111,22 @@ public partial record TestArrayPacket
     [MaxLength(4)] [Range(0, 31)] public int[] EntityIds { get; set; } = Array.Empty<int>();
     [FixedCount(4)] public bool[] Buttons { get; set; } = Array.Empty<bool>();
     [MaxLength(2)] public TestPlayerSnapshot[] Snapshots { get; set; } = Array.Empty<TestPlayerSnapshot>();
+}
+
+[BitPacket]
+public partial record TestGameMathPacket
+{
+    [Angle(16)] public float Yaw { get; set; }
+    [VectorRange(-100, 100, 2)] public Vector3 Position { get; set; }
+    [VectorRange(-10, 10, 1)] public Vector2 Velocity { get; set; }
+    [QuaternionSmallestThree(12)] public Quaternion Rotation { get; set; }
+}
+
+[BitPacket]
+public partial record TestGameMathArrayPacket
+{
+    [FixedCount(2)] [Angle(8)] public float[] AimHistory { get; set; } = Array.Empty<float>();
+    [MaxLength(2)] [VectorRange(-10, 10, 1)] public Vector2[] Points { get; set; } = Array.Empty<Vector2>();
 }
 
 [BitPacket(2)]
@@ -452,6 +469,96 @@ public class SerializationTests
     }
 
     [Fact]
+    public void GeneratedPacket_GameMathCodecsRoundTripAndReportMaxSize()
+    {
+        var packet = new TestGameMathPacket
+        {
+            Yaw = 123.45f,
+            Position = new Vector3(12.34f, -56.78f, 90.12f),
+            Velocity = new Vector2(-3.4f, 5.6f),
+            Rotation = Quaternion.Normalize(Quaternion.CreateFromYawPitchRoll(0.75f, -0.25f, 0.5f))
+        };
+        var buffer = new byte[TestGameMathPacket.MaxBytes];
+
+        packet.Serialize(new BitWriter(buffer));
+
+        var restored = TestGameMathPacket.Read(new BitReader(buffer));
+        Assert.Equal(packet.Yaw, restored.Yaw, 0.01f);
+        Assert.Equal(packet.Position.X, restored.Position.X, 0.02f);
+        Assert.Equal(packet.Position.Y, restored.Position.Y, 0.02f);
+        Assert.Equal(packet.Position.Z, restored.Position.Z, 0.02f);
+        Assert.Equal(packet.Velocity.X, restored.Velocity.X, 0.11f);
+        Assert.Equal(packet.Velocity.Y, restored.Velocity.Y, 0.11f);
+        Assert.True(Math.Abs(Quaternion.Dot(packet.Rotation, restored.Rotation)) > 0.999f);
+        Assert.Equal(115, TestGameMathPacket.MaxBits);
+        Assert.Equal(15, TestGameMathPacket.MaxBytes);
+        Assert.Contains("codec=angle;codecBits=16", TestGameMathPacket.LayoutManifest);
+        Assert.Contains("codec=vectorRange;min=-100;max=100;decimals=2;componentBits=15", TestGameMathPacket.LayoutManifest);
+        Assert.Contains("codec=quaternionSmallestThree;componentBits=12", TestGameMathPacket.LayoutManifest);
+    }
+
+    [Fact]
+    public void GeneratedPacket_GameMathArraysRoundTrip()
+    {
+        var packet = new TestGameMathArrayPacket
+        {
+            AimHistory = new[] { 0f, 270f },
+            Points = new[] { new Vector2(1.2f, -3.4f), new Vector2(5.6f, 7.8f) }
+        };
+        var buffer = new byte[TestGameMathArrayPacket.MaxBytes];
+
+        packet.Serialize(new BitWriter(buffer));
+
+        var restored = TestGameMathArrayPacket.Read(new BitReader(buffer));
+        Assert.Equal(packet.AimHistory[0], restored.AimHistory[0], 1.5f);
+        Assert.Equal(packet.AimHistory[1], restored.AimHistory[1], 1.5f);
+        Assert.Equal(packet.Points.Length, restored.Points.Length);
+        Assert.Equal(packet.Points[0].X, restored.Points[0].X, 0.11f);
+        Assert.Equal(packet.Points[0].Y, restored.Points[0].Y, 0.11f);
+        Assert.Equal(packet.Points[1].X, restored.Points[1].X, 0.11f);
+        Assert.Equal(packet.Points[1].Y, restored.Points[1].Y, 0.11f);
+        Assert.Equal(50, TestGameMathArrayPacket.MaxBits);
+        Assert.Equal(7, TestGameMathArrayPacket.MaxBytes);
+        Assert.Contains("field=AimHistory;type=float[]", TestGameMathArrayPacket.LayoutManifest);
+        Assert.Contains("codec=angle;codecBits=8;array=fixed;count=2;elementType=float;elementBits=8;bits=16", TestGameMathArrayPacket.LayoutManifest);
+    }
+
+    [Fact]
+    public void GeneratedPacket_GameMathCodecOutOfRangeThrows()
+    {
+        var packet = new TestGameMathPacket
+        {
+            Yaw = 360f,
+            Position = Vector3.Zero,
+            Velocity = Vector2.Zero,
+            Rotation = Quaternion.Identity
+        };
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(new BitWriter(new byte[64])));
+        Assert.Contains("Yaw", ex.ParamName);
+
+        packet.Yaw = 0f;
+        packet.Position = new Vector3(101f, 0f, 0f);
+        ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.Serialize(new BitWriter(new byte[64])));
+        Assert.Contains("Position", ex.ParamName);
+    }
+
+    [Fact]
+    public void GeneratedPacket_GameMathZeroQuaternionThrows()
+    {
+        var packet = new TestGameMathPacket
+        {
+            Yaw = 0f,
+            Position = Vector3.Zero,
+            Velocity = Vector2.Zero,
+            Rotation = default
+        };
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => packet.SerializeUnchecked(new BitWriter(new byte[64])));
+        Assert.Contains("Rotation", ex.ParamName);
+    }
+
+    [Fact]
     public void GeneratedPacket_TrySerializeReturnsBytesWrittenAndRejectsSmallBuffer()
     {
         var packet = new TestGeneratedApiPacket
@@ -644,7 +751,8 @@ public partial class BadPacketNoSetter
             .Concat(new[]
             {
                 MetadataReference.CreateFromFile(typeof(BitPacketAttribute).Assembly.Location),
-                MetadataReference.CreateFromFile(typeof(MaxLengthAttribute).Assembly.Location)
+                MetadataReference.CreateFromFile(typeof(MaxLengthAttribute).Assembly.Location),
+                MetadataReference.CreateFromFile(typeof(Vector3).Assembly.Location)
             })
             .GroupBy(r => r.Display)
             .Select(g => g.First())
@@ -804,6 +912,58 @@ public partial class BadStringArrayPacket
 ");
 
         Assert.Contains(errors, e => e.Id == "BP0004" && e.GetMessage().Contains("string arrays"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenAngleIsAppliedToWrongType()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+[BitPacket]
+public partial class BadAnglePacket
+{
+    [Angle]
+    public int Yaw { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0005" && e.GetMessage().Contains("float or double"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenVectorRangeIsAppliedToWrongType()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+[BitPacket]
+public partial class BadVectorPacket
+{
+    [VectorRange(-1, 1, 2)]
+    public float Position { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0005" && e.GetMessage().Contains("Vector2 or Vector3"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenQuaternionCodecIsAppliedToWrongType()
+    {
+        var errors = GetGeneratorErrors(@"
+using System.Numerics;
+using BitPack;
+
+[BitPacket]
+public partial class BadQuaternionPacket
+{
+    [QuaternionSmallestThree]
+    public Vector3 Rotation { get; set; }
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0005" && e.GetMessage().Contains("Quaternion"));
     }
 
     [Fact]

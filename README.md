@@ -152,6 +152,7 @@ BitPack supports a dedicated subset of types designed for predictable sizing and
 | **Text** | `string` | UTF-8 byte stream prepended by a bit-length header |
 | **Enums** | Any C# `enum` | Compact bits based on range or the enum's maximum declared value |
 | **Date & Time** | `DateTime` | 64 bits (UTC tick representation) |
+| **Game Math** | `System.Numerics.Vector2`, `Vector3`, `Quaternion`, angle `float`/`double` | Attribute-driven quantized game-networking codecs |
 | **Value Objects** | User-defined `struct` | Supported via custom static `Read(BitReader)` and `Serialize(BitWriter)` hook detection |
 | **Nested Objects** | Types marked `[BitPacket]` | Recursively serialized inline |
 | **Bounded Arrays** | One-dimensional `T[]` with `[MaxLength]` or `[FixedCount]` | Compact length header for variable arrays, no header for fixed arrays |
@@ -184,6 +185,18 @@ Use the following attributes to configure bit constraints, quantization, version
 *   `[FixedCount(int count)]`
     *   **Targets**: One-dimensional array properties or fields.
     *   **Description**: Serializes exactly `count` array elements with no length header. The array must be non-null and must have exactly `count` elements at serialization time. Use this for fixed-size inputs, inventory slots, button masks, and other fixed packet shapes.
+
+*   `[Angle(int bits = 16)]`
+    *   **Targets**: `float` or `double` properties/fields, including bounded array elements.
+    *   **Description**: Quantizes a degree angle in the range `[0, 360)` into `bits` bits. Out-of-range values throw during `Serialize()`.
+
+*   `[VectorRange(double minimum, double maximum, int decimals)]`
+    *   **Targets**: `System.Numerics.Vector2` or `System.Numerics.Vector3` properties/fields, including bounded array elements.
+    *   **Description**: Quantizes every vector component using the same range and decimal precision. For example, `[VectorRange(-1024, 1024, 2)]` stores centimeter precision over a shared world-space range.
+
+*   `[QuaternionSmallestThree(int bitsPerComponent = 16)]`
+    *   **Targets**: `System.Numerics.Quaternion` properties/fields.
+    *   **Description**: Normalizes and serializes a quaternion using the compact smallest-three representation: 2 bits for the omitted largest component index plus three quantized components.
 
 ### 2. Standard C# Data Annotation Attributes
 
@@ -327,6 +340,44 @@ Variable arrays treat `null` as empty during serialization. Fixed arrays must be
 
 Current limitations: jagged arrays, multidimensional arrays, `string[]`, interface arrays, and `List<T>` are not supported. Use nested packet types or custom value objects when you need richer repeated structures.
 
+### 4. Game Math Codecs
+Game math codecs target common networking payloads where full 32-bit floats are usually wasteful:
+
+```csharp
+using System.Numerics;
+
+[BitPacket]
+public partial record PlayerTransform
+{
+    // 16 bits instead of a 32-bit float. Valid range is [0, 360).
+    [Angle(16)]
+    public float Yaw { get; set; }
+
+    // Each Vector3 component uses fixed-point quantization.
+    // Range -1024..1024 with 2 decimals needs 18 bits per component.
+    [VectorRange(-1024, 1024, 2)]
+    public Vector3 Position { get; set; }
+
+    // 2-bit largest-component index + 3 quantized components.
+    [QuaternionSmallestThree(16)]
+    public Quaternion Rotation { get; set; }
+}
+```
+
+`[Angle]` throws for values outside `[0, 360)` instead of wrapping silently. `[VectorRange]` throws when any component is outside the declared range. `[QuaternionSmallestThree]` normalizes non-zero quaternions during serialization and rejects zero-length quaternions.
+
+Game math codecs also work with bounded arrays when the codec attribute is placed on the array member:
+
+```csharp
+[BitPacket]
+public partial record AimHistory
+{
+    [FixedCount(4)]
+    [Angle(8)]
+    public float[] RecentAimDegrees { get; set; } = Array.Empty<float>();
+}
+```
+
 ---
 
 ## Serialization Wire Format
@@ -387,8 +438,14 @@ This still writes `AimAngle` first, then `IsMoving`, even though the source decl
 | `[BitPacket]` nested type | Sum of its own property bits | — |
 | `[MaxLength(n)] T[]` | `⌈log₂(n + 1)⌉` length header + present element bits | Unsupported without bounds |
 | `[FixedCount(n)] T[]` | `n × element bits` | Unsupported without bounds |
+| `[Angle(b)] float` | `b` bits | 32 bits |
+| `[VectorRange(min, max, d)] Vector2` | `2 × component bits` | Unsupported without codec |
+| `[VectorRange(min, max, d)] Vector3` | `3 × component bits` | Unsupported without codec |
+| `[QuaternionSmallestThree(b)] Quaternion` | `2 + 3b` bits | Unsupported without codec |
 
 For a variable bounded array like `[MaxLength(4)][Range(0, 31)] int[]`, BitPack writes a 3-bit array length header followed by 5 bits per present element. For a fixed array like `[FixedCount(4)] bool[]`, BitPack writes exactly 4 bits with no length header.
+
+For `[VectorRange]`, component bits are calculated as `⌈log₂((max − min) × 10ᵈ + 1)⌉`.
 
 ---
 
@@ -491,6 +548,9 @@ Renaming a property has no effect on the wire format. BitPack serializes by **de
 | `[MaxLength(16)]` → `[MaxLength(32)]` | Length header bit-width changes. All subsequent fields shift. |
 | `[MaxLength(4)] int[]` → `[MaxLength(8)] int[]` | Array length header and max payload size can change. |
 | `[FixedCount(4)] bool[]` → `[FixedCount(8)] bool[]` | Fixed payload width changes. |
+| `[Angle(16)]` → `[Angle(12)]` | Angle bit-width changes. |
+| `[VectorRange(-100, 100, 2)]` → `[VectorRange(-1000, 1000, 2)]` | Component bit-width changes. |
+| `[QuaternionSmallestThree(16)]` → `[QuaternionSmallestThree(12)]` | Quaternion payload width changes. |
 | `int` → `long` | 32 → 64 bits (or constrained bit-width changes). Shift. |
 | `float` → `[Range][Precision] float` | 32 bits → range bits. Shift. |
 
@@ -508,6 +568,7 @@ Renaming a property has no effect on the wire format. BitPack serializes by **de
 | Change `[Range]` on existing property | **No** | Fork to a new packet type, or bump version and add a new constrained property at end while deprecating the old one |
 | Change `[MaxLength]` on existing property | **No** | Same as range change |
 | Change `[MaxLength]` or `[FixedCount]` on an array | **No** | Add a new version-gated array field and keep the old one |
+| Change game math codec settings | **No** | Add a new version-gated field and keep the old one |
 | Change property type (`int` → `long`) | **No** | Add new property at end; keep old as unused |
 
 #### Detection at Runtime
@@ -542,6 +603,7 @@ BitPack enforces strict compile-time checks to prevent unoptimized layouts or in
 *   **Warning BP0002**: Raised when a primitive integer or string does not specify optimization attributes (such as Range or MaxLength), indicating that full type storage (unquantized) will be used as a fallback.
 *   **Error BP0003**: Raised when `[BitFieldKey]` usage is invalid: mixed keyed and unkeyed serializable members, duplicate keys, or negative keys.
 *   **Error BP0004**: Raised when array bounds are invalid: missing `[MaxLength]`/`[FixedCount]`, both bounds specified, negative/zero fixed counts, jagged arrays, multidimensional arrays, `string[]`, or interface arrays.
+*   **Error BP0005**: Raised when game math codec attributes are invalid or applied to unsupported types.
 
 ## Annotations and Runtime Safety
 
@@ -554,6 +616,9 @@ BitPack's bit-width optimization is driven entirely by compile-time attributes. 
 | `[Range(0, 1000)]` | Stores the value offset in exactly ⌈log₂(1001)⌉ = 10 bits instead of 32 |
 | `[MaxLength(16)]` | Allocates only ⌈log₂(16×4)⌉ = 6 bits for the string length header |
 | `[Precision(2)]` (with `[Range]`) | Quantizes a `float`/`double` into a fixed-point integer needing only range bits |
+| `[Angle(16)]` | Stores a degree angle in 16 bits instead of 32 |
+| `[VectorRange(-100, 100, 2)]` | Stores each `Vector2`/`Vector3` component as fixed-point range bits |
+| `[QuaternionSmallestThree(16)]` | Stores a quaternion in 50 bits instead of 128 |
 
 **Enums are detected automatically.** BitPack calculates the minimum bit-width from the largest declared enum field value. To override this (e.g., to reserve headroom for future values), apply `[Range]` directly on the enum property:
 
@@ -641,6 +706,29 @@ new GamePacket { State = (GameState)99 };
 ```
 
 **Floats/doubles with `[Precision]`** — values outside the `[Range]` throw identically.
+
+**Game math codecs** — `[Angle]` throws outside `[0, 360)`, `[VectorRange]` throws when any component is outside the declared range, and `[QuaternionSmallestThree]` throws for zero-length quaternions:
+
+```csharp
+[BitPacket]
+public partial record TransformPacket
+{
+    [Angle(16)]
+    public float Yaw { get; set; }
+
+    [VectorRange(-100, 100, 2)]
+    public Vector3 Position { get; set; }
+
+    [QuaternionSmallestThree(16)]
+    public Quaternion Rotation { get; set; }
+}
+
+// Throws: angle must be less than 360.
+new TransformPacket { Yaw = 360f, Rotation = Quaternion.Identity }.Serialize(writer);
+
+// Throws: X exceeds the VectorRange max.
+new TransformPacket { Position = new Vector3(101f, 0f, 0f), Rotation = Quaternion.Identity }.Serialize(writer);
+```
 
 BitPack cannot validate runtime values at compile time. Guard your setters or validate inputs before constructing packets to stay within declared bounds.
 
