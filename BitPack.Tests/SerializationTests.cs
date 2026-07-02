@@ -651,6 +651,266 @@ public class SerializationTests
     }
 
     [Fact]
+    public void GeneratedPacket_DeltaNoChangesWritesOnlyChangedBitsAndClonesArrays()
+    {
+        var baseline = new TestArrayPacket
+        {
+            EntityIds = new[] { 1, 7, 31 },
+            Buttons = new[] { true, false, true, true },
+            Snapshots = Array.Empty<TestPlayerSnapshot>()
+        };
+        var packet = new TestArrayPacket
+        {
+            EntityIds = new[] { 1, 7, 31 },
+            Buttons = new[] { true, false, true, true },
+            Snapshots = Array.Empty<TestPlayerSnapshot>()
+        };
+        var buffer = new byte[TestArrayPacket.MaxDeltaBytes];
+        var writer = new BitWriter(buffer);
+
+        packet.SerializeDelta(baseline, writer);
+
+        Assert.Equal(100, TestArrayPacket.MaxDeltaBits);
+        Assert.Equal(13, TestArrayPacket.MaxDeltaBytes);
+        Assert.Equal(1, writer.BytesWritten);
+
+        var restored = TestArrayPacket.ReadDelta(baseline, new BitReader(buffer));
+        Assert.Equal(packet.EntityIds, restored.EntityIds);
+        Assert.Equal(packet.Buttons, restored.Buttons);
+        Assert.Equal(packet.Snapshots, restored.Snapshots);
+        Assert.NotSame(baseline.EntityIds, restored.EntityIds);
+        Assert.NotSame(baseline.Buttons, restored.Buttons);
+        Assert.NotSame(baseline.Snapshots, restored.Snapshots);
+    }
+
+    [Fact]
+    public void GeneratedPacket_DeltaRoundTripsPrimitiveStringAndEnumChanges()
+    {
+        var baseline = new TestGeneratedApiPacket
+        {
+            Value = 1,
+            Flag = false,
+            Name = "A",
+            State = TestGameState.Idle
+        };
+        var packet = new TestGeneratedApiPacket
+        {
+            Value = 42,
+            Flag = false,
+            Name = "AB",
+            State = TestGameState.Running
+        };
+        var buffer = new byte[TestGeneratedApiPacket.MaxDeltaBytes];
+
+        packet.SerializeDelta(baseline, new BitWriter(buffer));
+
+        Assert.Equal(147, TestGeneratedApiPacket.MaxDeltaBits);
+        Assert.Equal(19, TestGeneratedApiPacket.MaxDeltaBytes);
+
+        var restored = TestGeneratedApiPacket.ReadDelta(baseline, new BitReader(buffer));
+        Assert.Equal(packet.Value, restored.Value);
+        Assert.Equal(packet.Flag, restored.Flag);
+        Assert.Equal(packet.Name, restored.Name);
+        Assert.Equal(packet.State, restored.State);
+    }
+
+    [Fact]
+    public void GeneratedPacket_DeltaSupportsPrimaryConstructorsAndInitOnlyProperties()
+    {
+        var primaryBaseline = new TestPrimaryCtorPacket(25, "Alex");
+        var primaryPacket = new TestPrimaryCtorPacket(26, "Lex");
+        var primaryBuffer = new byte[TestPrimaryCtorPacket.MaxDeltaBytes];
+
+        primaryPacket.SerializeDelta(primaryBaseline, new BitWriter(primaryBuffer));
+
+        var primaryRestored = TestPrimaryCtorPacket.ReadDelta(primaryBaseline, new BitReader(primaryBuffer));
+        Assert.Equal(primaryPacket.Age, primaryRestored.Age);
+        Assert.Equal(primaryPacket.Nickname, primaryRestored.Nickname);
+
+        var initBaseline = new TestInitAndRequiredPacket
+        {
+            RegularVal = 123,
+            InitOnlyVal = 456,
+            RequiredName = "baseline"
+        };
+        var initPacket = new TestInitAndRequiredPacket
+        {
+            RegularVal = 123,
+            InitOnlyVal = 789,
+            RequiredName = "updated"
+        };
+        var initBuffer = new byte[TestInitAndRequiredPacket.MaxDeltaBytes];
+
+        initPacket.SerializeDelta(initBaseline, new BitWriter(initBuffer));
+
+        var initRestored = TestInitAndRequiredPacket.ReadDelta(initBaseline, new BitReader(initBuffer));
+        Assert.Equal(initPacket.RegularVal, initRestored.RegularVal);
+        Assert.Equal(initPacket.InitOnlyVal, initRestored.InitOnlyVal);
+        Assert.Equal(initPacket.RequiredName, initRestored.RequiredName);
+    }
+
+    [Fact]
+    public void GeneratedPacket_DeltaPreservesInheritedKeyedWireOrder()
+    {
+        var baseline = new TestMoveGamePacket
+        {
+            Tick = 123,
+            IsReliable = true,
+            DeltaX = 0,
+            IsJumping = false
+        };
+        var packet = new TestMoveGamePacket
+        {
+            Tick = 123,
+            IsReliable = false,
+            DeltaX = -42,
+            IsJumping = false
+        };
+        var buffer = new byte[TestMoveGamePacket.MaxDeltaBytes];
+        var writer = new BitWriter(buffer);
+
+        packet.SerializeDelta(baseline, writer);
+
+        Assert.Equal(24, TestMoveGamePacket.MaxDeltaBits);
+        Assert.Equal(3, TestMoveGamePacket.MaxDeltaBytes);
+
+        var manualReader = new BitReader(buffer);
+        Assert.False(manualReader.ReadBool()); // Tick key 0 unchanged
+        Assert.True(manualReader.ReadBool()); // IsReliable key 1 changed
+        Assert.False(manualReader.ReadBool()); // IsReliable payload
+        Assert.True(manualReader.ReadBool()); // DeltaX key 2 changed
+
+        var restored = TestMoveGamePacket.ReadDelta(baseline, new BitReader(buffer));
+        Assert.Equal(packet.Tick, restored.Tick);
+        Assert.Equal(packet.IsReliable, restored.IsReliable);
+        Assert.Equal(packet.DeltaX, restored.DeltaX);
+        Assert.Equal(packet.IsJumping, restored.IsJumping);
+    }
+
+    [Fact]
+    public void GeneratedPacket_DeltaRoundTripsVersionedFieldsAndKeepsBaselineForOlderStreams()
+    {
+        var baseline = new TestVersionedInput { BaseSpeed = 75, ExtraBoost = true };
+        var packet = new TestVersionedInput { BaseSpeed = 80, ExtraBoost = false };
+        var buffer = new byte[TestVersionedInput.MaxDeltaBytes];
+
+        packet.SerializeDelta(baseline, new BitWriter(buffer));
+
+        Assert.Equal(14, TestVersionedInput.MaxDeltaBits);
+        Assert.Equal(2, TestVersionedInput.MaxDeltaBytes);
+
+        var restored = TestVersionedInput.ReadDelta(baseline, new BitReader(buffer));
+        Assert.Equal(packet.BaseSpeed, restored.BaseSpeed);
+        Assert.Equal(packet.ExtraBoost, restored.ExtraBoost);
+
+        Span<byte> olderBuffer = stackalloc byte[2];
+        var olderWriter = new BitSpanWriter(olderBuffer);
+        olderWriter.WriteInt(1, 4);
+        olderWriter.WriteBool(true);
+        olderWriter.WriteInt(90, 7);
+
+        var olderReader = new BitSpanReader(olderBuffer.Slice(0, olderWriter.BytesWritten));
+        var restoredFromOlder = TestVersionedInput.ReadDelta(baseline, ref olderReader);
+        Assert.Equal(90, restoredFromOlder.BaseSpeed);
+        Assert.True(restoredFromOlder.ExtraBoost);
+    }
+
+    [Fact]
+    public void GeneratedPacket_DeltaRoundTripsBoundedArrayChanges()
+    {
+        var baseline = new TestArrayPacket
+        {
+            EntityIds = new[] { 1 },
+            Buttons = new[] { false, false, false, false },
+            Snapshots = Array.Empty<TestPlayerSnapshot>()
+        };
+        var packet = new TestArrayPacket
+        {
+            EntityIds = new[] { 1, 7, 31 },
+            Buttons = new[] { true, false, true, true },
+            Snapshots = new[]
+            {
+                new TestPlayerSnapshot { X = 1.23f, Y = -4.56f }
+            }
+        };
+        var buffer = new byte[TestArrayPacket.MaxDeltaBytes];
+
+        packet.SerializeDelta(baseline, new BitWriter(buffer));
+
+        var restored = TestArrayPacket.ReadDelta(baseline, new BitReader(buffer));
+        Assert.Equal(packet.EntityIds, restored.EntityIds);
+        Assert.Equal(packet.Buttons, restored.Buttons);
+        Assert.Single(restored.Snapshots);
+        Assert.Equal(packet.Snapshots[0].X, restored.Snapshots[0].X, 2);
+        Assert.Equal(packet.Snapshots[0].Y, restored.Snapshots[0].Y, 2);
+    }
+
+    [Fact]
+    public void GeneratedPacket_DeltaRoundTripsGameMathChanges()
+    {
+        var baseline = new TestGameMathPacket
+        {
+            Yaw = 0f,
+            Position = Vector3.Zero,
+            Velocity = Vector2.Zero,
+            Rotation = Quaternion.Identity
+        };
+        var packet = new TestGameMathPacket
+        {
+            Yaw = 123.45f,
+            Position = new Vector3(12.34f, -56.78f, 90.12f),
+            Velocity = new Vector2(-3.4f, 5.6f),
+            Rotation = Quaternion.Normalize(Quaternion.CreateFromYawPitchRoll(0.75f, -0.25f, 0.5f))
+        };
+        var buffer = new byte[TestGameMathPacket.MaxDeltaBytes];
+
+        packet.SerializeDelta(baseline, new BitWriter(buffer));
+
+        Assert.Equal(119, TestGameMathPacket.MaxDeltaBits);
+        Assert.Equal(15, TestGameMathPacket.MaxDeltaBytes);
+
+        var restored = TestGameMathPacket.ReadDelta(baseline, new BitReader(buffer));
+        Assert.Equal(packet.Yaw, restored.Yaw, 0.01f);
+        Assert.Equal(packet.Position.X, restored.Position.X, 0.02f);
+        Assert.Equal(packet.Position.Y, restored.Position.Y, 0.02f);
+        Assert.Equal(packet.Position.Z, restored.Position.Z, 0.02f);
+        Assert.Equal(packet.Velocity.X, restored.Velocity.X, 0.11f);
+        Assert.Equal(packet.Velocity.Y, restored.Velocity.Y, 0.11f);
+        Assert.True(Math.Abs(Quaternion.Dot(packet.Rotation, restored.Rotation)) > 0.999f);
+    }
+
+    [Fact]
+    public void GeneratedPacket_DeltaSpanAndTrySerializeDeltaRoundTrip()
+    {
+        var baseline = new TestKeyedPacket { First = 1, Middle = false, Last = false };
+        var packet = new TestKeyedPacket { First = 7, Middle = true, Last = false };
+
+        Assert.False(packet.TrySerializeDelta(baseline, Array.Empty<byte>(), out var smallBytesWritten));
+        Assert.Equal(0, smallBytesWritten);
+
+        var arrayBuffer = new byte[TestKeyedPacket.MaxDeltaBytes];
+        Assert.True(packet.TrySerializeDelta(baseline, arrayBuffer, out var arrayBytesWritten));
+        Assert.True(arrayBytesWritten > 0);
+        var arrayRestored = TestKeyedPacket.ReadDelta(baseline, new BitReader(arrayBuffer));
+        Assert.Equal(packet.First, arrayRestored.First);
+        Assert.Equal(packet.Middle, arrayRestored.Middle);
+        Assert.Equal(packet.Last, arrayRestored.Last);
+
+        Assert.False(packet.TrySerializeDelta(baseline, Span<byte>.Empty, out var smallSpanBytesWritten));
+        Assert.Equal(0, smallSpanBytesWritten);
+
+        Span<byte> spanBuffer = stackalloc byte[TestKeyedPacket.MaxDeltaBytes];
+        Assert.True(packet.TrySerializeDelta(baseline, spanBuffer, out var spanBytesWritten));
+        Assert.Equal(arrayBytesWritten, spanBytesWritten);
+
+        var spanReader = new BitSpanReader(spanBuffer.Slice(0, spanBytesWritten));
+        var spanRestored = TestKeyedPacket.ReadDelta(baseline, ref spanReader);
+        Assert.Equal(packet.First, spanRestored.First);
+        Assert.Equal(packet.Middle, spanRestored.Middle);
+        Assert.Equal(packet.Last, spanRestored.Last);
+    }
+
+    [Fact]
     public void GeneratedPacket_SerializeUncheckedSkipsGeneratedRangeChecks()
     {
         var packet = new TestRangeOverflowPacket { SmallValue = 200, Latitude = 0 };

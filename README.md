@@ -68,27 +68,27 @@ Results are written to `BenchmarkDotNet.Artifacts/results/` as Markdown, CSV, an
 
 | Method | Scenario | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :--- | :---: | :---: | :---: |
-| **Serialize_Simple_BitPack_ReusableBuffer** | Reused caller buffer | **20.660 ns** | **20.645 ns** | **0 B** |
-| Serialize_Simple_BitPack_FreshBuffer | Fresh byte array | 30.946 ns | 31.034 ns | 80 B |
-| Serialize_Simple_BitPack_PooledBuffer | ArrayPool byte array | 31.245 ns | 31.032 ns | 32 B |
-| Serialize_Simple_MemoryPack_ReusableWriter | Reused writer | 2.725 ns | 2.729 ns | 0 B |
-| Serialize_Simple_MemoryPack_FreshWriter | Fresh writer | 20.820 ns | 20.266 ns | 312 B |
-| Serialize_Simple_MessagePack_ReusableWriter | Reused writer | 34.128 ns | 34.048 ns | 0 B |
-| Serialize_Simple_MessagePack_FreshWriter | Fresh writer | 65.761 ns | 65.821 ns | 312 B |
-| Serialize_Simple_ProtoBuf_ReusableBuffer | Reused buffer | 163.982 ns | 164.682 ns | 64 B |
-| Serialize_Simple_ProtoBuf_FreshBuffer | Fresh buffer | 194.421 ns | 194.103 ns | 344 B |
-| Serialize_Simple_JsonContext_ReusableBuffer | Reused buffer | 261.379 ns | 260.278 ns | 512 B |
-| Serialize_Simple_JsonContext_FreshBuffer | Fresh buffer | 315.939 ns | 314.860 ns | 792 B |
+| **Serialize_Simple_BitPack_ReusableBuffer** | Reused caller buffer | **24.661 ns** | **24.628 ns** | **0 B** |
+| Serialize_Simple_BitPack_FreshBuffer | Fresh byte array | 33.033 ns | 32.654 ns | 88 B |
+| Serialize_Simple_BitPack_PooledBuffer | ArrayPool byte array | 34.286 ns | 34.335 ns | 40 B |
+| Serialize_Simple_MemoryPack_ReusableWriter | Reused writer | 2.729 ns | 2.704 ns | 0 B |
+| Serialize_Simple_MemoryPack_FreshWriter | Fresh writer | 15.673 ns | 15.662 ns | 312 B |
+| Serialize_Simple_MessagePack_ReusableWriter | Reused writer | 32.815 ns | 32.613 ns | 0 B |
+| Serialize_Simple_MessagePack_FreshWriter | Fresh writer | 49.691 ns | 49.435 ns | 312 B |
+| Serialize_Simple_ProtoBuf_ReusableBuffer | Reused buffer | 149.947 ns | 150.308 ns | 64 B |
+| Serialize_Simple_ProtoBuf_FreshBuffer | Fresh buffer | 171.755 ns | 171.815 ns | 344 B |
+| Serialize_Simple_JsonContext_ReusableBuffer | Reused buffer | 247.656 ns | 243.170 ns | 512 B |
+| Serialize_Simple_JsonContext_FreshBuffer | Fresh buffer | 265.664 ns | 264.727 ns | 792 B |
 
 #### Deserialization Speed & Allocations
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Deserialize_Simple_BitPack** | **11.020 ns** | **11.011 ns** | **0 B** |
-| Deserialize_Simple_MemoryPack | 1.201 ns | 1.203 ns | 0 B |
-| Deserialize_Simple_MessagePack | 56.105 ns | 56.021 ns | 0 B |
-| Deserialize_Simple_ProtoBuf | 172.243 ns | 172.261 ns | 88 B |
-| Deserialize_Simple_JsonContext | 462.254 ns | 459.973 ns | 64 B |
+| **Deserialize_Simple_BitPack** | **22.222 ns** | **22.039 ns** | **0 B** |
+| Deserialize_Simple_MemoryPack | 1.113 ns | 1.101 ns | 0 B |
+| Deserialize_Simple_MessagePack | 50.954 ns | 50.319 ns | 0 B |
+| Deserialize_Simple_ProtoBuf | 151.719 ns | 151.713 ns | 88 B |
+| Deserialize_Simple_JsonContext | 416.543 ns | 411.595 ns | 64 B |
 
 ---
 
@@ -108,27 +108,27 @@ Results are written to `BenchmarkDotNet.Artifacts/results/` as Markdown, CSV, an
 
 | Method | Scenario | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :--- | :---: | :---: | :---: |
-| **Serialize_Complex_BitPack_ReusableBuffer** | Reused caller buffer | **99.078 ns** | **99.222 ns** | **0 B** |
-| Serialize_Complex_BitPack_FreshBuffer | Fresh byte array | 131.817 ns | 131.268 ns | 288 B |
-| Serialize_Complex_BitPack_PooledBuffer | ArrayPool byte array | 113.639 ns | 114.262 ns | 32 B |
-| Serialize_Complex_MemoryPack_ReusableWriter | Reused writer | 30.232 ns | 30.203 ns | 0 B |
-| Serialize_Complex_MemoryPack_FreshWriter | Fresh writer | 55.187 ns | 54.929 ns | 312 B |
-| Serialize_Complex_MessagePack_ReusableWriter | Reused writer | 111.643 ns | 111.502 ns | 0 B |
-| Serialize_Complex_MessagePack_FreshWriter | Fresh writer | 145.868 ns | 145.043 ns | 312 B |
-| Serialize_Complex_ProtoBuf_ReusableBuffer | Reused buffer | 357.804 ns | 357.474 ns | 64 B |
-| Serialize_Complex_ProtoBuf_FreshBuffer | Fresh buffer | 383.253 ns | 382.784 ns | 344 B |
-| Serialize_Complex_JsonContext_ReusableBuffer | Reused buffer | 1,087.488 ns | 1,086.497 ns | 5016 B |
-| Serialize_Complex_JsonContext_FreshBuffer | Fresh buffer | 1,204.780 ns | 1,200.545 ns | 6280 B |
+| **Serialize_Complex_BitPack_ReusableBuffer** | Reused caller buffer | **119.774 ns** | **118.002 ns** | **0 B** |
+| Serialize_Complex_BitPack_FreshBuffer | Fresh byte array | 148.823 ns | 148.586 ns | 296 B |
+| Serialize_Complex_BitPack_PooledBuffer | ArrayPool byte array | 128.342 ns | 128.371 ns | 40 B |
+| Serialize_Complex_MemoryPack_ReusableWriter | Reused writer | 28.155 ns | 27.820 ns | 0 B |
+| Serialize_Complex_MemoryPack_FreshWriter | Fresh writer | 48.732 ns | 49.070 ns | 312 B |
+| Serialize_Complex_MessagePack_ReusableWriter | Reused writer | 106.612 ns | 106.408 ns | 0 B |
+| Serialize_Complex_MessagePack_FreshWriter | Fresh writer | 137.330 ns | 136.413 ns | 312 B |
+| Serialize_Complex_ProtoBuf_ReusableBuffer | Reused buffer | 386.621 ns | 370.928 ns | 64 B |
+| Serialize_Complex_ProtoBuf_FreshBuffer | Fresh buffer | 388.283 ns | 388.405 ns | 344 B |
+| Serialize_Complex_JsonContext_ReusableBuffer | Reused buffer | 947.537 ns | 909.937 ns | 5016 B |
+| Serialize_Complex_JsonContext_FreshBuffer | Fresh buffer | 985.950 ns | 938.380 ns | 6280 B |
 
 #### Deserialization Speed & Allocations
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Deserialize_Complex_BitPack** | **79.537 ns** | **78.933 ns** | **104 B** |
-| Deserialize_Complex_MemoryPack | 48.209 ns | 48.545 ns | 104 B |
-| Deserialize_Complex_MessagePack | 216.623 ns | 215.640 ns | 104 B |
-| Deserialize_Complex_ProtoBuf | 442.423 ns | 439.675 ns | 192 B |
-| Deserialize_Complex_JsonContext | 1,335.907 ns | 1,343.896 ns | 792 B |
+| **Deserialize_Complex_BitPack** | **106.391 ns** | **106.438 ns** | **104 B** |
+| Deserialize_Complex_MemoryPack | 42.162 ns | 42.147 ns | 104 B |
+| Deserialize_Complex_MessagePack | 193.323 ns | 192.926 ns | 104 B |
+| Deserialize_Complex_ProtoBuf | 397.140 ns | 396.135 ns | 192 B |
+| Deserialize_Complex_JsonContext | 1,205.571 ns | 1,206.185 ns | 792 B |
 
 *Note on allocations:* The 104 bytes allocated during `Deserialize_Complex_BitPack` represent the two deserialized `string` objects themselves (`"Alex"` and `"Multiplayer Engine Pilot"`). BitPack's deserializer internals perform 0 garbage/helper allocations.
 
@@ -168,7 +168,7 @@ Use the following attributes to configure bit constraints, quantization, version
 
 *   `[BitPacket(Version = 1)]`
     *   **Targets**: Classes, structs, or records.
-    *   **Description**: Marks a type as a serialization target. The generator creates `Serialize(BitWriter)`, `Deserialize(BitReader)`, and static `Read(BitReader)` methods. If `Version > 1`, a 4-bit protocol version header is prepended to the bitstream.
+    *   **Description**: Marks a type as a serialization target. The generator creates full snapshot APIs (`Serialize`, `Deserialize`, `Read`, `TrySerialize`) and baseline delta APIs (`SerializeDelta`, `ReadDelta`, `TrySerializeDelta`) when the packet layout supports them. If `Version > 1`, a 4-bit protocol version header is prepended to the bitstream.
 
 *   `[Precision(int decimals)]`
     *   **Targets**: Float and double properties/fields.
@@ -378,6 +378,32 @@ public partial record AimHistory
 }
 ```
 
+### 5. Delta / Baseline Serialization
+Delta serialization writes only fields that differ from a baseline packet. Each field contributes one changed bit; changed fields then write their normal BitPack payload, while unchanged fields write no payload.
+
+```csharp
+var baseline = new PlayerInput { Tick = 100, AimAngle = 90, IsMoving = false };
+var current = new PlayerInput { Tick = 101, AimAngle = 90, IsMoving = true };
+
+Span<byte> delta = stackalloc byte[PlayerInput.MaxDeltaBytes];
+current.TrySerializeDelta(baseline, delta, out var bytesWritten);
+
+var reader = new BitSpanReader(delta[..bytesWritten]);
+var restored = PlayerInput.ReadDelta(baseline, ref reader);
+```
+
+Delta payloads are not standalone. The reader must apply the payload to the same baseline state that the writer used, and normal full `Serialize`/`Read` snapshots should be sent whenever a peer needs a new baseline.
+
+Generated delta APIs include:
+
+*   `SerializeDelta(baseline, BitWriter writer)`
+*   `SerializeDeltaUnchecked(baseline, BitWriter writer)`
+*   `ReadDelta(baseline, BitReader reader)`
+*   `TrySerializeDelta(baseline, byte[] buffer, out int bytesWritten)`
+*   Span equivalents for span-compatible packets.
+
+`MaxDeltaBits` and `MaxDeltaBytes` report worst-case delta size, which is the full snapshot size plus one changed bit per field. Actual deltas are often much smaller. Packets with interface-typed fields do not emit delta APIs yet because changed interface fields need an explicit concrete factory or clone contract.
+
 ---
 
 ## Serialization Wire Format
@@ -405,6 +431,8 @@ The wire layout for a single packet is:
 ```
 
 If the packet has `[BitPacket(Version = N)]` with `N > 1`, a 4-bit version header is prepended at offset 0 before all properties.
+
+Delta payloads use the same field order, but each field is preceded by a 1-bit changed flag. If the flag is `0`, the reader copies that field from the supplied baseline. If the flag is `1`, the reader consumes the normal field payload from the stream.
 
 The deserializer reads properties in the same sequential order, consuming exactly the same number of bits per property. Any mismatch in order, type, or bit-width between writer and reader produces **silent data corruption** — not an error message.
 

@@ -129,12 +129,18 @@ public class PacketGenerator : IIncrementalGenerator
         var hasVersionedTargets = targets.Any(t => GetPropertyVersion(t.Symbol) > 1);
         var maxBits = GetPacketMaxBits(typeSymbol, targets, packetMaxVersion);
         var maxBytes = maxBits < 0 ? -1 : (maxBits + 7) / 8;
+        var maxDeltaBits = maxBits < 0 ? -1 : maxBits + targets.Count(t => GetPropertyVersion(t.Symbol) <= packetMaxVersion);
+        var maxDeltaBytes = maxDeltaBits < 0 ? -1 : (maxDeltaBits + 7) / 8;
         var layoutManifest = BuildLayoutManifest(typeSymbol, targets, packetMaxVersion, maxBits, maxBytes);
         var layoutHash = ComputeFnv1A32(layoutManifest);
         var supportsSpanApis = targets.All(IsSpanCompatibleTarget);
+        var supportsDeltaApis = targets.All(IsDeltaCompatibleTarget);
+        var ctor = FindMatchingConstructor(typeSymbol as INamedTypeSymbol, targets, out var ctorArgs);
 
         sourceBuilder.AppendLine($"    public const int MaxBits = {maxBits};");
         sourceBuilder.AppendLine($"    public const int MaxBytes = {maxBytes};");
+        sourceBuilder.AppendLine($"    public const int MaxDeltaBits = {maxDeltaBits};");
+        sourceBuilder.AppendLine($"    public const int MaxDeltaBytes = {maxDeltaBytes};");
         sourceBuilder.AppendLine($"    public const uint LayoutHash = 0x{layoutHash:X8}u;");
         sourceBuilder.AppendLine($"    public const string LayoutManifest = \"{EscapeStringLiteral(layoutManifest)}\";");
         sourceBuilder.AppendLine();
@@ -155,6 +161,27 @@ public class PacketGenerator : IIncrementalGenerator
         sourceBuilder.AppendLine("    }");
         sourceBuilder.AppendLine();
 
+        if (supportsDeltaApis)
+        {
+            sourceBuilder.AppendLine($"    public void SerializeDelta({typeName} baseline, BitWriter writer)");
+            sourceBuilder.AppendLine("    {");
+            if (!typeSymbol.IsValueType)
+                sourceBuilder.AppendLine("        if (baseline == null) throw new ArgumentNullException(nameof(baseline));");
+            if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
+            GenerateDeltaSerializationLoop(context, sourceBuilder, typeSymbol, targets, packetMaxVersion, false);
+            sourceBuilder.AppendLine("    }");
+            sourceBuilder.AppendLine();
+
+            sourceBuilder.AppendLine($"    public void SerializeDeltaUnchecked({typeName} baseline, BitWriter writer)");
+            sourceBuilder.AppendLine("    {");
+            if (!typeSymbol.IsValueType)
+                sourceBuilder.AppendLine("        if (baseline == null) throw new ArgumentNullException(nameof(baseline));");
+            if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
+            GenerateDeltaSerializationLoop(context, sourceBuilder, typeSymbol, targets, packetMaxVersion, true);
+            sourceBuilder.AppendLine("    }");
+            sourceBuilder.AppendLine();
+        }
+
         if (supportsSpanApis)
         {
             sourceBuilder.AppendLine("    public void Serialize(ref BitSpanWriter writer)");
@@ -170,6 +197,27 @@ public class PacketGenerator : IIncrementalGenerator
             GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, true, packetMaxVersion, true, true);
             sourceBuilder.AppendLine("    }");
             sourceBuilder.AppendLine();
+
+            if (supportsDeltaApis)
+            {
+                sourceBuilder.AppendLine($"    public void SerializeDelta({typeName} baseline, ref BitSpanWriter writer)");
+                sourceBuilder.AppendLine("    {");
+                if (!typeSymbol.IsValueType)
+                    sourceBuilder.AppendLine("        if (baseline == null) throw new ArgumentNullException(nameof(baseline));");
+                if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
+                GenerateDeltaSerializationLoop(context, sourceBuilder, typeSymbol, targets, packetMaxVersion, false, true);
+                sourceBuilder.AppendLine("    }");
+                sourceBuilder.AppendLine();
+
+                sourceBuilder.AppendLine($"    public void SerializeDeltaUnchecked({typeName} baseline, ref BitSpanWriter writer)");
+                sourceBuilder.AppendLine("    {");
+                if (!typeSymbol.IsValueType)
+                    sourceBuilder.AppendLine("        if (baseline == null) throw new ArgumentNullException(nameof(baseline));");
+                if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
+                GenerateDeltaSerializationLoop(context, sourceBuilder, typeSymbol, targets, packetMaxVersion, true, true);
+                sourceBuilder.AppendLine("    }");
+                sourceBuilder.AppendLine();
+            }
 
             sourceBuilder.AppendLine("    public bool TrySerialize(Span<byte> buffer, out int bytesWritten)");
             sourceBuilder.AppendLine("    {");
@@ -195,6 +243,32 @@ public class PacketGenerator : IIncrementalGenerator
             sourceBuilder.AppendLine("        }");
             sourceBuilder.AppendLine("    }");
             sourceBuilder.AppendLine();
+
+            if (supportsDeltaApis)
+            {
+                sourceBuilder.AppendLine($"    public bool TrySerializeDelta({typeName} baseline, Span<byte> buffer, out int bytesWritten)");
+                sourceBuilder.AppendLine("    {");
+                sourceBuilder.AppendLine("        bytesWritten = 0;");
+                sourceBuilder.AppendLine("        var writer = new BitSpanWriter(buffer);");
+                sourceBuilder.AppendLine("        try");
+                sourceBuilder.AppendLine("        {");
+                sourceBuilder.AppendLine("            SerializeDelta(baseline, ref writer);");
+                sourceBuilder.AppendLine("            bytesWritten = writer.BytesWritten;");
+                sourceBuilder.AppendLine("            return true;");
+                sourceBuilder.AppendLine("        }");
+                sourceBuilder.AppendLine("        catch (ArgumentOutOfRangeException)");
+                sourceBuilder.AppendLine("        {");
+                sourceBuilder.AppendLine("            bytesWritten = 0;");
+                sourceBuilder.AppendLine("            return false;");
+                sourceBuilder.AppendLine("        }");
+                sourceBuilder.AppendLine("        catch (IndexOutOfRangeException)");
+                sourceBuilder.AppendLine("        {");
+                sourceBuilder.AppendLine("            bytesWritten = 0;");
+                sourceBuilder.AppendLine("            return false;");
+                sourceBuilder.AppendLine("        }");
+                sourceBuilder.AppendLine("    }");
+                sourceBuilder.AppendLine();
+            }
         }
 
 
@@ -223,6 +297,33 @@ public class PacketGenerator : IIncrementalGenerator
         sourceBuilder.AppendLine("        }");
         sourceBuilder.AppendLine("    }");
         sourceBuilder.AppendLine();
+
+        if (supportsDeltaApis)
+        {
+            sourceBuilder.AppendLine($"    public bool TrySerializeDelta({typeName} baseline, byte[] buffer, out int bytesWritten)");
+            sourceBuilder.AppendLine("    {");
+            sourceBuilder.AppendLine("        bytesWritten = 0;");
+            sourceBuilder.AppendLine("        if (buffer == null) return false;");
+            sourceBuilder.AppendLine("        var writer = new BitWriter(buffer);");
+            sourceBuilder.AppendLine("        try");
+            sourceBuilder.AppendLine("        {");
+            sourceBuilder.AppendLine("            SerializeDelta(baseline, writer);");
+            sourceBuilder.AppendLine("            bytesWritten = writer.BytesWritten;");
+            sourceBuilder.AppendLine("            return true;");
+            sourceBuilder.AppendLine("        }");
+            sourceBuilder.AppendLine("        catch (ArgumentOutOfRangeException)");
+            sourceBuilder.AppendLine("        {");
+            sourceBuilder.AppendLine("            bytesWritten = 0;");
+            sourceBuilder.AppendLine("            return false;");
+            sourceBuilder.AppendLine("        }");
+            sourceBuilder.AppendLine("        catch (IndexOutOfRangeException)");
+            sourceBuilder.AppendLine("        {");
+            sourceBuilder.AppendLine("            bytesWritten = 0;");
+            sourceBuilder.AppendLine("            return false;");
+            sourceBuilder.AppendLine("        }");
+            sourceBuilder.AppendLine("    }");
+            sourceBuilder.AppendLine();
+        }
 
         // Generate Deserialize method
         sourceBuilder.AppendLine("    public void Deserialize(BitReader reader)");
@@ -294,7 +395,6 @@ public class PacketGenerator : IIncrementalGenerator
         sourceBuilder.AppendLine();
 
         // 3. Resolve constructor
-        var ctor = FindMatchingConstructor(typeSymbol as INamedTypeSymbol, targets, out var ctorArgs);
         if (ctor != null)
         {
             sourceBuilder.Append($"        var packet = new {typeName}(");
@@ -326,6 +426,29 @@ public class PacketGenerator : IIncrementalGenerator
 
         sourceBuilder.AppendLine("        return packet;");
         sourceBuilder.AppendLine("    }");
+
+        if (supportsDeltaApis)
+        {
+            sourceBuilder.AppendLine();
+            sourceBuilder.AppendLine($"    public static {typeName} ReadDelta({typeName} baseline, BitReader reader)");
+            sourceBuilder.AppendLine("    {");
+            if (!typeSymbol.IsValueType)
+                sourceBuilder.AppendLine("        if (baseline == null) throw new ArgumentNullException(nameof(baseline));");
+            if (packetMaxVersion > 1)
+                sourceBuilder.AppendLine(hasVersionedTargets
+                    ? "        var packetVersion = reader.ReadInt(4);"
+                    : "        reader.ReadInt(4);");
+            else if (hasVersionedTargets)
+                sourceBuilder.AppendLine("        var packetVersion = 1;");
+
+            GenerateBaselineReadVariables(sourceBuilder, targets);
+            sourceBuilder.AppendLine();
+            GenerateDeltaReadLoop(context, sourceBuilder, targets, packetMaxVersion);
+            sourceBuilder.AppendLine();
+            GeneratePacketConstruction(sourceBuilder, typeName, targets, ctor, ctorArgs);
+            sourceBuilder.AppendLine("        return packet;");
+            sourceBuilder.AppendLine("    }");
+        }
 
         if (supportsSpanApis)
         {
@@ -395,6 +518,29 @@ public class PacketGenerator : IIncrementalGenerator
 
             sourceBuilder.AppendLine("        return packet;");
             sourceBuilder.AppendLine("    }");
+
+            if (supportsDeltaApis)
+            {
+                sourceBuilder.AppendLine();
+                sourceBuilder.AppendLine($"    public static {typeName} ReadDelta({typeName} baseline, ref BitSpanReader reader)");
+                sourceBuilder.AppendLine("    {");
+                if (!typeSymbol.IsValueType)
+                    sourceBuilder.AppendLine("        if (baseline == null) throw new ArgumentNullException(nameof(baseline));");
+                if (packetMaxVersion > 1)
+                    sourceBuilder.AppendLine(hasVersionedTargets
+                        ? "        var packetVersion = reader.ReadInt(4);"
+                        : "        reader.ReadInt(4);");
+                else if (hasVersionedTargets)
+                    sourceBuilder.AppendLine("        var packetVersion = 1;");
+
+                GenerateBaselineReadVariables(sourceBuilder, targets);
+                sourceBuilder.AppendLine();
+                GenerateDeltaReadLoop(context, sourceBuilder, targets, packetMaxVersion, true);
+                sourceBuilder.AppendLine();
+                GeneratePacketConstruction(sourceBuilder, typeName, targets, ctor, ctorArgs);
+                sourceBuilder.AppendLine("        return packet;");
+                sourceBuilder.AppendLine("    }");
+            }
         }
 
         sourceBuilder.AppendLine("}");
@@ -598,6 +744,19 @@ public class PacketGenerator : IIncrementalGenerator
         return IsSpanCompatibleType(target.Type, target.Symbol);
     }
 
+    private static bool IsDeltaCompatibleTarget(SerializationTarget target)
+    {
+        return IsDeltaCompatibleType(target.Type);
+    }
+
+    private static bool IsDeltaCompatibleType(ITypeSymbol type)
+    {
+        if (type.TypeKind == TypeKind.Interface) return false;
+        if (type is IArrayTypeSymbol arrayType) return IsDeltaCompatibleType(arrayType.ElementType);
+
+        return true;
+    }
+
     private static bool IsSpanCompatibleType(ITypeSymbol type, ISymbol symbol)
     {
         if (type is IArrayTypeSymbol arrayType)
@@ -733,6 +892,129 @@ public class PacketGenerator : IIncrementalGenerator
                 sb.Append(propSb);
             }
         }
+    }
+
+    private static void GenerateDeltaSerializationLoop(SourceProductionContext context, StringBuilder sb,
+        ITypeSymbol typeSymbol, List<SerializationTarget> targets, int packetMaxVersion, bool skipValidation,
+        bool useSpan = false)
+    {
+        foreach (var target in targets)
+        {
+            var propVersion = GetPropertyVersion(target.Symbol);
+            if (propVersion > packetMaxVersion)
+                context.ReportDiagnostic(Diagnostic.Create(
+                    UnsupportedTypeError,
+                    target.Symbol.Locations.FirstOrDefault(),
+                    target.Name,
+                    $"Property version {propVersion} exceeds packet version {packetMaxVersion}."));
+
+            var changedVar = $"changed_{SanitizeIdentifier(target.Name)}";
+            var currentValue = $"this.{target.Name}";
+            var baselineValue = $"baseline.{target.Name}";
+            sb.AppendLine($"        var {changedVar} = !({GetEqualityExpression(target, currentValue, baselineValue)});");
+            sb.AppendLine($"        writer.WriteBool({changedVar});");
+            sb.AppendLine($"        if ({changedVar})");
+            sb.AppendLine("        {");
+
+            var propSb = new StringBuilder();
+            GeneratePropertySerialization(context, propSb, target, true, currentValue, skipValidation, useSpan);
+            AppendIndentedNonBlankLines(sb, propSb, "    ");
+
+            sb.AppendLine("        }");
+        }
+    }
+
+    private static void GenerateBaselineReadVariables(StringBuilder sb, List<SerializationTarget> targets)
+    {
+        foreach (var target in targets)
+            sb.AppendLine($"        var read_{target.Name} = {GetBaselineReadExpression(target)};");
+    }
+
+    private static void GenerateDeltaReadLoop(SourceProductionContext context, StringBuilder sb,
+        List<SerializationTarget> targets, int packetMaxVersion, bool useSpan = false)
+    {
+        foreach (var target in targets)
+        {
+            var propVersion = GetPropertyVersion(target.Symbol);
+            if (propVersion > packetMaxVersion) continue;
+
+            var changedBlock = new StringBuilder();
+            changedBlock.AppendLine("        if (reader.ReadBool())");
+            changedBlock.AppendLine("        {");
+
+            var propSb = new StringBuilder();
+            GeneratePropertySerialization(context, propSb, target, false, $"read_{target.Name}", false, useSpan);
+            AppendIndentedNonBlankLines(changedBlock, propSb, "    ");
+            changedBlock.AppendLine("        }");
+
+            if (propVersion > 1)
+            {
+                sb.AppendLine($"        if (packetVersion >= {propVersion})");
+                sb.AppendLine("        {");
+                AppendIndentedNonBlankLines(sb, changedBlock, "    ");
+                sb.AppendLine("        }");
+            }
+            else
+            {
+                sb.Append(changedBlock);
+            }
+        }
+    }
+
+    private static string GetEqualityExpression(SerializationTarget target, string left, string right)
+    {
+        if (target.Type is IArrayTypeSymbol arrayType)
+        {
+            var elementTypeName = arrayType.ElementType.ToDisplayString();
+            return $"global::System.Linq.Enumerable.SequenceEqual({left} ?? global::System.Array.Empty<{elementTypeName}>(), {right} ?? global::System.Array.Empty<{elementTypeName}>())";
+        }
+
+        return $"global::System.Collections.Generic.EqualityComparer<{target.Type.ToDisplayString()}>.Default.Equals({left}, {right})";
+    }
+
+    private static string GetBaselineReadExpression(SerializationTarget target)
+    {
+        if (target.Type is IArrayTypeSymbol)
+            return $"baseline.{target.Name} == null ? null : ({target.Type.ToDisplayString()})baseline.{target.Name}.Clone()";
+
+        return $"baseline.{target.Name}";
+    }
+
+    private static void GeneratePacketConstruction(StringBuilder sourceBuilder, string typeName,
+        List<SerializationTarget> targets, IMethodSymbol? ctor, List<SerializationTarget> ctorArgs)
+    {
+        if (ctor != null)
+        {
+            sourceBuilder.Append($"        var packet = new {typeName}(");
+            for (var i = 0; i < ctorArgs.Count; i++)
+            {
+                sourceBuilder.Append($"read_{ctorArgs[i].Name}");
+                if (i < ctorArgs.Count - 1) sourceBuilder.Append(", ");
+            }
+
+            sourceBuilder.AppendLine(")");
+            sourceBuilder.AppendLine("        {");
+            foreach (var target in targets)
+                if (!ctorArgs.Contains(target) && IsWritablePropertyForInitializer(target.Symbol))
+                    sourceBuilder.AppendLine($"            {target.Name} = read_{target.Name},");
+            sourceBuilder.AppendLine("        };");
+        }
+        else
+        {
+            sourceBuilder.AppendLine($"        var packet = new {typeName}");
+            sourceBuilder.AppendLine("        {");
+            foreach (var target in targets)
+                if (IsWritablePropertyForInitializer(target.Symbol))
+                    sourceBuilder.AppendLine($"            {target.Name} = read_{target.Name},");
+            sourceBuilder.AppendLine("        };");
+        }
+    }
+
+    private static void AppendIndentedNonBlankLines(StringBuilder target, StringBuilder source, string indent)
+    {
+        foreach (var line in source.ToString().Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+            if (!string.IsNullOrWhiteSpace(line))
+                target.AppendLine(indent + line);
     }
 
     private static void GeneratePropertySerialization(SourceProductionContext context, StringBuilder sb,
