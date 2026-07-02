@@ -771,9 +771,34 @@ public partial class PlayerInputPacket : BaseGamePacket
 Base members are discovered before derived members, and keyed packets are serialized by ascending `[BitFieldKey]` across the full inherited layout. Do not mark abstract base classes with `[BitPacket]`; only concrete packet types should be packet targets.
 
 ### 3. Character and String Encoding
-All string properties are serialized using UTF-8 encoding. This supports international characters and Unicode symbols. Span-based `stackalloc byte` blocks are used internally to prevent heap allocations during deserialization.
+All string properties are serialized using UTF-8 encoding. This supports international characters and Unicode symbols. Temporary byte buffers are rented from `ArrayPool<byte>.Shared` when string payloads need encoding or decoding.
 
-### 4. Encryption and Compression Pipelines
+### 4. Memory and Span APIs
+`BitWriter` and `BitReader` support both array and memory-backed buffers:
+
+```csharp
+var buffer = new byte[PlayerInput.MaxBytes];
+var writer = new BitWriter(buffer.AsMemory());
+packet.Serialize(writer);
+
+var reader = new BitReader(new ReadOnlyMemory<byte>(buffer, 0, writer.BytesWritten));
+var restored = PlayerInput.Read(reader);
+```
+
+For stackalloc, socket buffers, and allocation-sensitive hot paths, use the span-native `ref struct` APIs:
+
+```csharp
+Span<byte> buffer = stackalloc byte[PlayerInput.MaxBytes];
+var writer = new BitSpanWriter(buffer);
+packet.Serialize(ref writer);
+
+var reader = new BitSpanReader(buffer[..writer.BytesWritten]);
+var restored = PlayerInput.Read(ref reader);
+```
+
+Generated span overloads are emitted only when every field can be serialized with built-in span-compatible codecs. Packets containing interface fields, nested packet fields, or custom value objects without span hooks keep the classic `BitWriter`/`BitReader` APIs.
+
+### 5. Encryption and Compression Pipelines
 BitPack is engineered solely for structural packet size optimization (fitting fields into precise bit configurations). 
 *   **Compression**: Generic compression algorithms (like Brotli, Deflate, or Gzip) operate on byte patterns. Trying to compress individual bits during serialization is counterproductive.
 *   **Encryption**: Symmetric encryption (like AES-GCM or ChaCha20) must be applied to the completed byte array.
@@ -781,15 +806,15 @@ BitPack is engineered solely for structural packet size optimization (fitting fi
     ```text
     [C# Objects] ──> BitPack (Serialize) ──> [Raw Bytes] ──> Encrypt/Compress ──> [UDP/TCP Socket]
     ```
-    If encryption or compression are required, they should be applied to the resulting byte array (e.g. from `BitWriter.ToArray()` or `BitWriter.Buffer`) rather than attempting to perform them within the serializer itself.
+    If encryption or compression are required, they should be applied to the written byte range, e.g. `buffer.AsSpan(0, writer.BytesWritten)`.
 
-### 5. Performance Design
+### 6. Performance Design
 
 BitPack's performance is achieved through several deliberate design choices:
 
 *   **Tiered bit-width writes**: The `WriteLong`/`ReadLong` core methods branch on the total bit span (`bitOffset + bitCount`), dispatching to byte (≤8 bits), `ushort` (≤16), `uint` (≤32), or `ulong` (≤64) read-modify-write paths. This avoids full 64-bit memory traffic for narrow values like booleans or range-constrained integers.
-*   **Zero-heap allocations**: All internal buffers for string encoding use `stackalloc` for small payloads and `ArrayPool<byte>.Shared` for large ones. The `ReadDecimal` method uses the `decimal(int,int,int,bool,byte)` constructor to avoid allocating `new int[4]`.
-*   **Span-based APIs throughout**: `WriteBytes` and `ReadBytes` operate on `ReadOnlySpan<byte>` / `Span<byte>`, enabling the JIT to eliminate bounds checks and enabling vectorized copy for byte-aligned writes.
+*   **Low-allocation paths**: Decimal serialization uses stack storage on modern TFMs, and string encoding/decoding rents temporary buffers from `ArrayPool<byte>.Shared`.
+*   **Span-based APIs throughout**: `BitSpanWriter`, `BitSpanReader`, `WriteBytes`, and `ReadBytes` operate on `Span<byte>` / `ReadOnlySpan<byte>`, enabling stackalloc buffers and direct socket/pipeline integration.
 *   **Compile-time code generation**: The Roslyn incremental source generator emits specialized serialization logic per type, avoiding any runtime reflection or dynamic code generation.
 
 ---

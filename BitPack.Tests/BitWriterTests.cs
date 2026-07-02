@@ -82,6 +82,68 @@ public class BitWriterTests
     }
 
     [Fact]
+    public void MemoryWriterAndReader_RoundTripPrimitiveValues()
+    {
+        var buffer = new byte[64];
+        var writer = new BitWriter(buffer.AsMemory());
+
+        writer.WriteBool(true);
+        writer.WriteInt(17, 5);
+        writer.WriteString("abc", 8);
+        writer.WriteDecimal(123.45m);
+
+        var reader = new BitReader(new ReadOnlyMemory<byte>(buffer, 0, writer.BytesWritten));
+
+        Assert.True(reader.ReadBool());
+        Assert.Equal(17, reader.ReadInt(5));
+        Assert.Equal("abc", reader.ReadString(8));
+        Assert.Equal(123.45m, reader.ReadDecimal());
+    }
+
+    [Fact]
+    public void SpanWriterAndReader_RoundTripPrimitiveValues()
+    {
+        Span<byte> buffer = stackalloc byte[64];
+        var writer = new BitSpanWriter(buffer);
+
+        writer.WriteBool(false);
+        writer.WriteInt(29, 5);
+        writer.WriteString("xyz", 8);
+        writer.WriteDouble(123.456);
+
+        var reader = new BitSpanReader(buffer.Slice(0, writer.BytesWritten));
+
+        Assert.False(reader.ReadBool());
+        Assert.Equal(29, reader.ReadInt(5));
+        Assert.Equal("xyz", reader.ReadString(8));
+        Assert.Equal(123.456, reader.ReadDouble());
+    }
+
+    [Fact]
+    public void SpanReader_ReadBytesUnalignedRoundTrips()
+    {
+        Span<byte> buffer = stackalloc byte[128];
+        Span<byte> source = stackalloc byte[17];
+        for (var i = 0; i < source.Length; i++) source[i] = (byte)(i * 13 + 7);
+
+        var writer = new BitSpanWriter(buffer);
+        writer.WriteBool(true);
+        writer.WriteBool(false);
+        writer.WriteBool(true);
+        writer.WriteBytes(source);
+
+        var reader = new BitSpanReader(buffer.Slice(0, writer.BytesWritten));
+        Assert.True(reader.ReadBool());
+        Assert.False(reader.ReadBool());
+        Assert.True(reader.ReadBool());
+
+        Span<byte> destination = stackalloc byte[17];
+        reader.ReadBytes(destination);
+
+        Assert.True(source.SequenceEqual(destination));
+    }
+
+    [Fact]
     public void WriteDecimal_DoesNotAllocate()
     {
         var buffer = new byte[32];

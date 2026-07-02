@@ -584,6 +584,73 @@ public class SerializationTests
     }
 
     [Fact]
+    public void GeneratedPacket_TrySerializeSpanReturnsBytesWrittenAndRejectsSmallBuffer()
+    {
+        var packet = new TestGeneratedApiPacket
+        {
+            Value = 42,
+            Flag = true,
+            Name = "AB",
+            State = TestGameState.Running
+        };
+
+        Span<byte> smallBuffer = stackalloc byte[TestGeneratedApiPacket.MaxBytes - 1];
+        Assert.False(packet.TrySerialize(smallBuffer, out var smallBytesWritten));
+        Assert.Equal(0, smallBytesWritten);
+
+        Span<byte> buffer = stackalloc byte[TestGeneratedApiPacket.MaxBytes];
+        Assert.True(packet.TrySerialize(buffer, out var bytesWritten));
+        Assert.True(bytesWritten > 0);
+
+        var reader = new BitSpanReader(buffer.Slice(0, bytesWritten));
+        var restored = TestGeneratedApiPacket.Read(ref reader);
+        Assert.Equal(packet.Value, restored.Value);
+        Assert.Equal(packet.Flag, restored.Flag);
+        Assert.Equal(packet.Name, restored.Name);
+        Assert.Equal(packet.State, restored.State);
+    }
+
+    [Fact]
+    public void GeneratedPacket_SpanSerializeAndReadRoundTrip()
+    {
+        var packet = new TestKeyedPacket { First = 7, Middle = true, Last = false };
+        Span<byte> buffer = stackalloc byte[TestKeyedPacket.MaxBytes];
+        var writer = new BitSpanWriter(buffer);
+
+        packet.Serialize(ref writer);
+
+        var reader = new BitSpanReader(buffer.Slice(0, writer.BytesWritten));
+        var restored = TestKeyedPacket.Read(ref reader);
+
+        Assert.Equal(packet.First, restored.First);
+        Assert.Equal(packet.Middle, restored.Middle);
+        Assert.Equal(packet.Last, restored.Last);
+    }
+
+    [Fact]
+    public void GeneratedPacket_SpanSerializeSupportsMathArrays()
+    {
+        var packet = new TestGameMathArrayPacket
+        {
+            AimHistory = new[] { 45f, 180f },
+            Points = new[] { new Vector2(1.2f, -3.4f) }
+        };
+        Span<byte> buffer = stackalloc byte[TestGameMathArrayPacket.MaxBytes];
+        var writer = new BitSpanWriter(buffer);
+
+        packet.Serialize(ref writer);
+
+        var reader = new BitSpanReader(buffer.Slice(0, writer.BytesWritten));
+        var restored = TestGameMathArrayPacket.Read(ref reader);
+
+        Assert.Equal(packet.AimHistory[0], restored.AimHistory[0], 1.5f);
+        Assert.Equal(packet.AimHistory[1], restored.AimHistory[1], 1.5f);
+        Assert.Single(restored.Points);
+        Assert.Equal(packet.Points[0].X, restored.Points[0].X, 0.11f);
+        Assert.Equal(packet.Points[0].Y, restored.Points[0].Y, 0.11f);
+    }
+
+    [Fact]
     public void GeneratedPacket_SerializeUncheckedSkipsGeneratedRangeChecks()
     {
         var packet = new TestRangeOverflowPacket { SmallValue = 200, Latitude = 0 };

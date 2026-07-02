@@ -131,6 +131,7 @@ public class PacketGenerator : IIncrementalGenerator
         var maxBytes = maxBits < 0 ? -1 : (maxBits + 7) / 8;
         var layoutManifest = BuildLayoutManifest(typeSymbol, targets, packetMaxVersion, maxBits, maxBytes);
         var layoutHash = ComputeFnv1A32(layoutManifest);
+        var supportsSpanApis = targets.All(IsSpanCompatibleTarget);
 
         sourceBuilder.AppendLine($"    public const int MaxBits = {maxBits};");
         sourceBuilder.AppendLine($"    public const int MaxBytes = {maxBytes};");
@@ -153,6 +154,49 @@ public class PacketGenerator : IIncrementalGenerator
         GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, true, packetMaxVersion, true);
         sourceBuilder.AppendLine("    }");
         sourceBuilder.AppendLine();
+
+        if (supportsSpanApis)
+        {
+            sourceBuilder.AppendLine("    public void Serialize(ref BitSpanWriter writer)");
+            sourceBuilder.AppendLine("    {");
+            if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
+            GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, true, packetMaxVersion, false, true);
+            sourceBuilder.AppendLine("    }");
+            sourceBuilder.AppendLine();
+
+            sourceBuilder.AppendLine("    public void SerializeUnchecked(ref BitSpanWriter writer)");
+            sourceBuilder.AppendLine("    {");
+            if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
+            GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, true, packetMaxVersion, true, true);
+            sourceBuilder.AppendLine("    }");
+            sourceBuilder.AppendLine();
+
+            sourceBuilder.AppendLine("    public bool TrySerialize(Span<byte> buffer, out int bytesWritten)");
+            sourceBuilder.AppendLine("    {");
+            sourceBuilder.AppendLine("        bytesWritten = 0;");
+            if (maxBytes >= 0)
+                sourceBuilder.AppendLine($"        if (buffer.Length < {maxBytes}) return false;");
+            sourceBuilder.AppendLine("        var writer = new BitSpanWriter(buffer);");
+            sourceBuilder.AppendLine("        try");
+            sourceBuilder.AppendLine("        {");
+            sourceBuilder.AppendLine("            Serialize(ref writer);");
+            sourceBuilder.AppendLine("            bytesWritten = writer.BytesWritten;");
+            sourceBuilder.AppendLine("            return true;");
+            sourceBuilder.AppendLine("        }");
+            sourceBuilder.AppendLine("        catch (ArgumentOutOfRangeException)");
+            sourceBuilder.AppendLine("        {");
+            sourceBuilder.AppendLine("            bytesWritten = 0;");
+            sourceBuilder.AppendLine("            return false;");
+            sourceBuilder.AppendLine("        }");
+            sourceBuilder.AppendLine("        catch (IndexOutOfRangeException)");
+            sourceBuilder.AppendLine("        {");
+            sourceBuilder.AppendLine("            bytesWritten = 0;");
+            sourceBuilder.AppendLine("            return false;");
+            sourceBuilder.AppendLine("        }");
+            sourceBuilder.AppendLine("    }");
+            sourceBuilder.AppendLine();
+        }
+
 
         sourceBuilder.AppendLine("    public bool TrySerialize(byte[] buffer, out int bytesWritten)");
         sourceBuilder.AppendLine("    {");
@@ -191,6 +235,20 @@ public class PacketGenerator : IIncrementalGenerator
 
         GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, false, packetMaxVersion, false);
         sourceBuilder.AppendLine("    }");
+
+        if (supportsSpanApis)
+        {
+            sourceBuilder.AppendLine();
+            sourceBuilder.AppendLine("    public void Deserialize(ref BitSpanReader reader)");
+            sourceBuilder.AppendLine("    {");
+            if (packetMaxVersion > 1)
+                sourceBuilder.AppendLine(hasVersionedTargets
+                    ? "        var packetVersion = reader.ReadInt(4);"
+                    : "        reader.ReadInt(4);");
+            else if (hasVersionedTargets) sourceBuilder.AppendLine("        var packetVersion = 1;");
+            GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, false, packetMaxVersion, false, true);
+            sourceBuilder.AppendLine("    }");
+        }
 
 
         // Generate static Read factory method (enables clean nested deserialization)
@@ -268,6 +326,76 @@ public class PacketGenerator : IIncrementalGenerator
 
         sourceBuilder.AppendLine("        return packet;");
         sourceBuilder.AppendLine("    }");
+
+        if (supportsSpanApis)
+        {
+            sourceBuilder.AppendLine();
+            sourceBuilder.AppendLine($"    public static {typeName} Read(ref BitSpanReader reader)");
+            sourceBuilder.AppendLine("    {");
+            if (packetMaxVersion > 1)
+                sourceBuilder.AppendLine(hasVersionedTargets
+                    ? "        var packetVersion = reader.ReadInt(4);"
+                    : "        reader.ReadInt(4);");
+            else if (hasVersionedTargets)
+                sourceBuilder.AppendLine("        var packetVersion = 1;");
+
+            foreach (var target in targets)
+                sourceBuilder.AppendLine($"        var read_{target.Name} = default({target.Type.ToDisplayString()});");
+
+            sourceBuilder.AppendLine();
+
+            foreach (var target in targets)
+            {
+                var propVersion = GetPropertyVersion(target.Symbol);
+                var propSb = new StringBuilder();
+                GeneratePropertySerialization(context, propSb, target, false, $"read_{target.Name}", false, true);
+
+                if (propVersion > 1)
+                {
+                    sourceBuilder.AppendLine($"        if (packetVersion >= {propVersion})");
+                    sourceBuilder.AppendLine("        {");
+                    foreach (var line in propSb.ToString().Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+                        if (!string.IsNullOrWhiteSpace(line))
+                            sourceBuilder.AppendLine("    " + line);
+                    sourceBuilder.AppendLine("        }");
+                }
+                else
+                {
+                    sourceBuilder.Append(propSb);
+                }
+            }
+
+            sourceBuilder.AppendLine();
+
+            if (ctor != null)
+            {
+                sourceBuilder.Append($"        var packet = new {typeName}(");
+                for (var i = 0; i < ctorArgs.Count; i++)
+                {
+                    sourceBuilder.Append($"read_{ctorArgs[i].Name}");
+                    if (i < ctorArgs.Count - 1) sourceBuilder.Append(", ");
+                }
+
+                sourceBuilder.AppendLine(")");
+                sourceBuilder.AppendLine("        {");
+                foreach (var target in targets)
+                    if (!ctorArgs.Contains(target) && IsWritablePropertyForInitializer(target.Symbol))
+                        sourceBuilder.AppendLine($"            {target.Name} = read_{target.Name},");
+                sourceBuilder.AppendLine("        };");
+            }
+            else
+            {
+                sourceBuilder.AppendLine($"        var packet = new {typeName}");
+                sourceBuilder.AppendLine("        {");
+                foreach (var target in targets)
+                    if (IsWritablePropertyForInitializer(target.Symbol))
+                        sourceBuilder.AppendLine($"            {target.Name} = read_{target.Name},");
+                sourceBuilder.AppendLine("        };");
+            }
+
+            sourceBuilder.AppendLine("        return packet;");
+            sourceBuilder.AppendLine("    }");
+        }
 
         sourceBuilder.AppendLine("}");
 
@@ -465,6 +593,37 @@ public class PacketGenerator : IIncrementalGenerator
             message));
     }
 
+    private static bool IsSpanCompatibleTarget(SerializationTarget target)
+    {
+        return IsSpanCompatibleType(target.Type, target.Symbol);
+    }
+
+    private static bool IsSpanCompatibleType(ITypeSymbol type, ISymbol symbol)
+    {
+        if (type is IArrayTypeSymbol arrayType)
+            return TryGetArrayConfig(symbol, arrayType, out _, out _) &&
+                   IsSpanCompatibleType(arrayType.ElementType, symbol);
+
+        if (TryGetAngleConfig(type, symbol, out _, out _) ||
+            TryGetVectorRangeConfig(type, symbol, out _, out _) ||
+            TryGetQuaternionSmallestThreeConfig(type, symbol, out _, out _))
+            return true;
+
+        if (type.SpecialType is SpecialType.System_Boolean or SpecialType.System_Char or SpecialType.System_String
+            or SpecialType.System_Single or SpecialType.System_Double or SpecialType.System_Decimal
+            or SpecialType.System_UInt32 or SpecialType.System_UInt64 or SpecialType.System_SByte
+            or SpecialType.System_Byte or SpecialType.System_Int16 or SpecialType.System_UInt16
+            or SpecialType.System_Int32 or SpecialType.System_Int64)
+            return true;
+
+        if (type.ToDisplayString() is "System.DateTime" or "nint" or "System.IntPtr" or "nuint" or "System.UIntPtr")
+            return true;
+
+        if (type.TypeKind == TypeKind.Enum) return true;
+
+        return false;
+    }
+
     private static IMethodSymbol? FindMatchingConstructor(INamedTypeSymbol? typeSymbol,
         List<SerializationTarget> targets, out List<SerializationTarget> ctorArgs)
     {
@@ -525,7 +684,7 @@ public class PacketGenerator : IIncrementalGenerator
 
     private static void GenerateSerializationLoop(SourceProductionContext context, StringBuilder sb,
         ITypeSymbol typeSymbol, List<SerializationTarget> targets, bool isWriting, int packetMaxVersion,
-        bool skipValidation)
+        bool skipValidation, bool useSpan = false)
     {
         foreach (var target in targets)
         {
@@ -541,20 +700,20 @@ public class PacketGenerator : IIncrementalGenerator
 
             if (isWriting)
             {
-                GeneratePropertySerialization(context, propSb, target, true, $"this.{target.Name}", skipValidation);
+                GeneratePropertySerialization(context, propSb, target, true, $"this.{target.Name}", skipValidation, useSpan);
             }
             else
             {
                 if (IsWritableProperty(target.Symbol))
                 {
-                    GeneratePropertySerialization(context, propSb, target, false, $"this.{target.Name}");
+                    GeneratePropertySerialization(context, propSb, target, false, $"this.{target.Name}", false, useSpan);
                 }
                 else
                 {
                     propSb.AppendLine(
                         $"        // Read and discard init-only / read-only property '{target.Name}' during instance Deserialize");
                     propSb.AppendLine($"        {target.Type.ToDisplayString()} discard_{target.Name};");
-                    GeneratePropertySerialization(context, propSb, target, false, $"discard_{target.Name}");
+                    GeneratePropertySerialization(context, propSb, target, false, $"discard_{target.Name}", false, useSpan);
                 }
             }
 
@@ -577,13 +736,14 @@ public class PacketGenerator : IIncrementalGenerator
     }
 
     private static void GeneratePropertySerialization(SourceProductionContext context, StringBuilder sb,
-        SerializationTarget target, bool isWriting, string targetVarName, bool skipValidation = false)
+        SerializationTarget target, bool isWriting, string targetVarName, bool skipValidation = false,
+        bool useSpan = false)
     {
         var propType = target.Type;
 
         if (propType is IArrayTypeSymbol arrayType)
         {
-            GenerateArraySerialization(context, sb, target, arrayType, isWriting, targetVarName, skipValidation);
+            GenerateArraySerialization(context, sb, target, arrayType, isWriting, targetVarName, skipValidation, useSpan);
             return;
         }
 
@@ -1068,7 +1228,7 @@ public class PacketGenerator : IIncrementalGenerator
 
     private static void GenerateArraySerialization(SourceProductionContext context, StringBuilder sb,
         SerializationTarget target, IArrayTypeSymbol arrayType, bool isWriting, string targetVarName,
-        bool skipValidation)
+        bool skipValidation, bool useSpan)
     {
         if (!TryGetArrayConfig(target.Symbol, arrayType, out var config, out var error))
         {
@@ -1099,7 +1259,7 @@ public class PacketGenerator : IIncrementalGenerator
                 sb.AppendLine($"        for (var {indexVar} = 0; {indexVar} < {config.Count}; {indexVar}++)");
                 sb.AppendLine("        {");
                 sb.AppendLine($"        var {elementVar} = {targetVarName}[{indexVar}];");
-                GeneratePropertySerialization(context, sb, elementTarget, true, elementVar, skipValidation);
+                GeneratePropertySerialization(context, sb, elementTarget, true, elementVar, skipValidation, useSpan);
                 sb.AppendLine("        }");
             }
             else
@@ -1111,7 +1271,7 @@ public class PacketGenerator : IIncrementalGenerator
                 sb.AppendLine($"        for (var {indexVar} = 0; {indexVar} < {valueVar}.Length; {indexVar}++)");
                 sb.AppendLine("        {");
                 sb.AppendLine($"        var {elementVar} = {valueVar}[{indexVar}];");
-                GeneratePropertySerialization(context, sb, elementTarget, true, elementVar, skipValidation);
+                GeneratePropertySerialization(context, sb, elementTarget, true, elementVar, skipValidation, useSpan);
                 sb.AppendLine("        }");
             }
         }
@@ -1124,7 +1284,7 @@ public class PacketGenerator : IIncrementalGenerator
             sb.AppendLine($"        for (var i_{SanitizeIdentifier(target.Name)} = 0; i_{SanitizeIdentifier(target.Name)} < {targetVarName}.Length; i_{SanitizeIdentifier(target.Name)}++)");
             sb.AppendLine("        {");
             GeneratePropertySerialization(context, sb, elementTarget, false,
-                $"{targetVarName}[i_{SanitizeIdentifier(target.Name)}]", skipValidation);
+                $"{targetVarName}[i_{SanitizeIdentifier(target.Name)}]", skipValidation, useSpan);
             sb.AppendLine("        }");
         }
     }
