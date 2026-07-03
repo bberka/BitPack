@@ -10,6 +10,50 @@ By generating serialization logic at compile time using Roslyn Incremental Sourc
 
 ---
 
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Supported Types](#supported-types)
+- [Attributes](#attributes)
+  - [BitPack Attributes](#bitpack-attributes)
+  - [Standard Data Annotations](#standard-data-annotations)
+  - [Member Control Attributes](#member-control-attributes)
+- [Member Selection](#member-selection)
+- [Range-Based Optimization Examples](#range-based-optimization-examples)
+  - [Fixed-Point Quantization](#fixed-point-quantization)
+  - [Custom Read-Only Structs](#custom-read-only-structs)
+  - [Bounded Arrays](#bounded-arrays)
+  - [Game Math Codecs](#game-math-codecs)
+  - [Delta / Baseline Serialization](#delta--baseline-serialization)
+  - [Compact Unions / Discriminators](#compact-unions--discriminators)
+- [Serialization Wire Format](#serialization-wire-format)
+  - [Property Order](#property-order)
+  - [How Bit-Widths Are Determined](#how-bit-widths-are-determined)
+- [Backward Compatibility](#backward-compatibility)
+  - [Protocol Version Gating](#protocol-version-gating)
+  - [Compatibility Pitfalls](#compatibility-pitfalls)
+  - [Compatibility Decision Table](#compatibility-decision-table)
+  - [Detection at Runtime](#detection-at-runtime)
+- [Annotations and Runtime Safety](#annotations-and-runtime-safety)
+  - [Why Annotations Matter](#why-annotations-matter)
+  - [Runtime Mismatch and Overflow Behaviour](#runtime-mismatch-and-overflow-behaviour)
+- [Architectural Guidance](#architectural-guidance)
+  - [Object Instantiation and Constructors](#object-instantiation-and-constructors)
+  - [Inheritance and Shared Base Packets](#inheritance-and-shared-base-packets)
+  - [String Encoding](#string-encoding)
+  - [Memory and Span APIs](#memory-and-span-apis)
+  - [Encryption and Compression Pipelines](#encryption-and-compression-pipelines)
+  - [Performance Design](#performance-design)
+- [Diagnostics](#diagnostics)
+- [Benchmark Results](#benchmark-results)
+  - [Running Benchmarks](#running-benchmarks)
+  - [Simple Packet Benchmarks](#simple-packet-benchmarks)
+  - [Complex Packet Benchmarks](#complex-packet-benchmarks)
+- [Contributing](#contributing)
+
+---
+
 ## Installation
 
 Install the `BitPack` class library package via the NuGet Package Manager or .NET CLI:
@@ -26,115 +70,43 @@ Install-Package BitPack
 
 ### PackageReference
 ```xml
-<PackageReference Include="BitPack" Version="0.1.0" />
+<PackageReference Include="BitPack" Version="1.6.0" />
 ```
 
 ---
 
-## Benchmark Results
+## Quick Start
 
-The following benchmarks compare serialization and deserialization of two packet structures under **High Process Priority** using **.NET 10.0.9**:
+```csharp
+using BitPack;
+using System.ComponentModel.DataAnnotations;
 
-1.  **Simple Packet (Primitive-only)**: Contains 12 properties (integer, float, double, byte, sbyte, short, ushort, ticks, and boolean states) with no string fields.
-2.  **Complex Packet**: Contains 12 properties including strings, DateTimes, enums, and nested structs.
+[BitPacket]
+public partial class PlayerInput
+{
+    [BitFieldKey(0)]
+    [Range(0, 360)] public int AimAngle { get; set; }
 
-### Running Benchmarks
+    [BitFieldKey(1)]
+    public bool IsMoving { get; set; }
 
-Run the full benchmark suite in Release mode from the repository root:
+    [BitFieldKey(2)]
+    [MaxLength(16)] public string Name { get; set; } = "";
+}
 
-```bash
-dotnet run -c Release -f net10.0 --project BitPack.Benchmarks/BitPack.Benchmarks.csproj
+var packet = new PlayerInput { AimAngle = 90, IsMoving = true, Name = "Alex" };
+
+var buffer = new byte[PlayerInput.MaxBytes];
+packet.Serialize(new BitWriter(buffer));
+
+var restored = PlayerInput.Read(new BitReader(buffer));
 ```
 
-BenchmarkDotNet will prompt for which benchmarks to run. Use `*` to run all benchmarks, or enter a filter such as `*Simple*`, `*Complex*`, `*Serialize*`, or `*Deserialize*` to run a subset.
-
-Results are written to `BenchmarkDotNet.Artifacts/results/` as Markdown, CSV, and HTML reports. For the most stable numbers, close other heavy applications and avoid using the machine while the benchmarks run.
+The static `Read` factory and the `Serialize`/`Read` methods are generated for every `[BitPacket]` type at compile time, alongside `MaxBits`, `MaxBytes`, `LayoutHash`, and `LayoutManifest` constants.
 
 ---
 
-### 1. Simple Packet Benchmarks (12 Properties, No Strings)
-
-#### Wire Payload Sizes
-| Serializer | Wire Size (Bytes) | Bandwidth Saved vs MessagePack | Bandwidth Saved vs JSON |
-| :--- | :---: | :---: | :---: |
-| **BitPack** | **17 bytes** | **55.3%** | **89.7%** |
-| MemoryPack | 48 bytes | -26.3% | 70.9% |
-| MessagePack | 38 bytes | Reference | 77.0% |
-| protobuf-net | 50 bytes | -31.6% | 69.7% |
-| System.Text.Json | 165 bytes | -334.2% | Reference |
-
-#### Serialization Scenarios & Allocations
-*BenchmarkDotNet v0.15.8, .NET 10.0.9 (X64 RyuJIT x86-64-v3). Deserialization benchmarks consume the full deserialized object with BenchmarkDotNet's `Consumer`.*
-
-| Method | Scenario | Mean Speed | Median Speed | Managed Allocated Memory |
-| :--- | :--- | :---: | :---: | :---: |
-| **Serialize_Simple_BitPack_ReusableBuffer** | Reused caller buffer | **27.639 ns** | **26.864 ns** | **0 B** |
-| Serialize_Simple_BitPack_FreshBuffer | Fresh byte array | 31.995 ns | 31.773 ns | 88 B |
-| Serialize_Simple_BitPack_PooledBuffer | ArrayPool byte array | 36.041 ns | 35.799 ns | 40 B |
-| Serialize_Simple_MemoryPack_ReusableWriter | Reused writer | 3.182 ns | 3.167 ns | 0 B |
-| Serialize_Simple_MemoryPack_FreshWriter | Fresh writer | 15.431 ns | 15.445 ns | 312 B |
-| Serialize_Simple_MessagePack_ReusableWriter | Reused writer | 36.159 ns | 35.943 ns | 0 B |
-| Serialize_Simple_MessagePack_FreshWriter | Fresh writer | 50.333 ns | 49.903 ns | 312 B |
-| Serialize_Simple_ProtoBuf_ReusableBuffer | Reused buffer | 151.106 ns | 151.534 ns | 64 B |
-| Serialize_Simple_ProtoBuf_FreshBuffer | Fresh buffer | 162.467 ns | 161.377 ns | 344 B |
-| Serialize_Simple_JsonContext_ReusableBuffer | Reused buffer | 250.478 ns | 246.602 ns | 512 B |
-| Serialize_Simple_JsonContext_FreshBuffer | Fresh buffer | 260.442 ns | 256.496 ns | 792 B |
-
-#### Deserialization Speed & Allocations
-
-| Method | Mean Speed | Median Speed | Managed Allocated Memory |
-| :--- | :---: | :---: | :---: |
-| **Deserialize_Simple_BitPack** | **21.481 ns** | **21.431 ns** | **0 B** |
-| Deserialize_Simple_MemoryPack | 1.089 ns | 1.088 ns | 0 B |
-| Deserialize_Simple_MessagePack | 53.104 ns | 52.062 ns | 0 B |
-| Deserialize_Simple_ProtoBuf | 149.046 ns | 149.089 ns | 88 B |
-| Deserialize_Simple_JsonContext | 402.547 ns | 401.944 ns | 64 B |
-
----
-
-### 2. Complex Packet Benchmarks (12 Properties, Strings, DateTime, Enum, Nested Structs)
-
-#### Wire Payload Sizes
-| Serializer | Wire Size (Bytes) | Bandwidth Saved vs MessagePack | Bandwidth Saved vs JSON |
-| :--- | :---: | :---: | :---: |
-| **BitPack** | **68 bytes** | **40.9%** | **83.2%** |
-| MemoryPack | 139 bytes | -20.9% | 65.7% |
-| MessagePack | 115 bytes | Reference | 71.6% |
-| protobuf-net | 138 bytes | -20.0% | 65.9% |
-| System.Text.Json | 405 bytes | -252.2% | Reference |
-
-#### Serialization Scenarios & Allocations
-*BenchmarkDotNet v0.15.8, .NET 10.0.9 (X64 RyuJIT x86-64-v3).*
-
-| Method | Scenario | Mean Speed | Median Speed | Managed Allocated Memory |
-| :--- | :--- | :---: | :---: | :---: |
-| **Serialize_Complex_BitPack_ReusableBuffer** | Reused caller buffer | **106.775 ns** | **106.514 ns** | **0 B** |
-| Serialize_Complex_BitPack_FreshBuffer | Fresh byte array | 135.982 ns | 135.772 ns | 296 B |
-| Serialize_Complex_BitPack_PooledBuffer | ArrayPool byte array | 114.985 ns | 114.826 ns | 40 B |
-| Serialize_Complex_MemoryPack_ReusableWriter | Reused writer | 27.278 ns | 27.204 ns | 0 B |
-| Serialize_Complex_MemoryPack_FreshWriter | Fresh writer | 45.359 ns | 43.821 ns | 312 B |
-| Serialize_Complex_MessagePack_ReusableWriter | Reused writer | 103.857 ns | 103.753 ns | 0 B |
-| Serialize_Complex_MessagePack_FreshWriter | Fresh writer | 129.704 ns | 128.765 ns | 312 B |
-| Serialize_Complex_ProtoBuf_ReusableBuffer | Reused buffer | 343.284 ns | 343.380 ns | 64 B |
-| Serialize_Complex_ProtoBuf_FreshBuffer | Fresh buffer | 362.311 ns | 361.694 ns | 344 B |
-| Serialize_Complex_JsonContext_ReusableBuffer | Reused buffer | 952.025 ns | 947.801 ns | 5016 B |
-| Serialize_Complex_JsonContext_FreshBuffer | Fresh buffer | 1,016.394 ns | 1,010.441 ns | 6280 B |
-
-#### Deserialization Speed & Allocations
-
-| Method | Mean Speed | Median Speed | Managed Allocated Memory |
-| :--- | :---: | :---: | :---: |
-| **Deserialize_Complex_BitPack** | **104.865 ns** | **103.978 ns** | **104 B** |
-| Deserialize_Complex_MemoryPack | 42.235 ns | 41.502 ns | 104 B |
-| Deserialize_Complex_MessagePack | 196.158 ns | 192.539 ns | 104 B |
-| Deserialize_Complex_ProtoBuf | 390.517 ns | 389.103 ns | 192 B |
-| Deserialize_Complex_JsonContext | 1,200.014 ns | 1,184.467 ns | 792 B |
-
-*Note on allocations:* The 104 bytes allocated during `Deserialize_Complex_BitPack` represent the two deserialized `string` objects themselves (`"Alex"` and `"Multiplayer Engine Pilot"`). BitPack's deserializer internals perform 0 garbage/helper allocations.
-
----
-
-## Supported Types Reference
+## Supported Types
 
 BitPack supports a dedicated subset of types designed for predictable sizing and serialization:
 
@@ -148,7 +120,7 @@ BitPack supports a dedicated subset of types designed for predictable sizing and
 | | `long`, `ulong` | 64 bits (default, range-compressible) |
 | **Floating-Point** | `float`, `double` | 32/64 bits (default IEEE 754) or quantized fixed-point integer bits |
 | **High-Precision** | `decimal` | 128 bits (lossless 4-segment 32-bit integer backing) |
-| **Native Integers**| `nint`, `nuint` | 64 bits (default, range-compressible) |
+| **Native Integers** | `nint`, `nuint` | 64 bits (default, range-compressible) |
 | **Text** | `string` | UTF-8 byte stream prepended by a bit-length header |
 | **Enums** | Any C# `enum` | Compact bits based on range or the enum's maximum declared value |
 | **Date & Time** | `DateTime` | 64 bits (UTC tick representation) |
@@ -156,77 +128,50 @@ BitPack supports a dedicated subset of types designed for predictable sizing and
 | **Value Objects** | User-defined `struct` | Supported via custom static `Read(BitReader)` and `Serialize(BitWriter)` hook detection |
 | **Nested Objects** | Types marked `[BitPacket]` | Recursively serialized inline |
 | **Bounded Arrays** | One-dimensional `T[]` with `[MaxLength]` or `[FixedCount]` | Compact length header for variable arrays, no header for fixed arrays |
-| **Interfaces** | Interfaces implementing `IBitSerializable` | Deserialized directly into pre-allocated concrete objects |
+| **Interfaces** | Interfaces implementing `IBitSerializable` | Deserialized into a pre-allocated concrete object held by the host |
+| **Compact Unions** | Interfaces marked `[BitDiscriminator]` + `[BitVariant]` | Discriminator picks the concrete variant purely from the wire |
 
 ---
 
-## Attribute Reference
+## Attributes
 
-Use the following attributes to configure bit constraints, quantization, versioning, and member selection:
+Use the following attributes to configure bit constraints, quantization, versioning, and member selection.
 
-### 1. BitPack Attributes
+### BitPack Attributes
 
-*   `[BitPacket(Version = 1)]`
-    *   **Targets**: Classes, structs, or records.
-    *   **Description**: Marks a type as a serialization target. The generator creates full snapshot APIs (`Serialize`, `Deserialize`, `Read`, `TrySerialize`) and baseline delta APIs (`SerializeDelta`, `ReadDelta`, `TrySerializeDelta`) when the packet layout supports them. If `Version > 1`, a 4-bit protocol version header is prepended to the bitstream.
+| Attribute | Targets | Description |
+| :--- | :--- | :--- |
+| `[BitPacket(Version = 1)]` | Classes, structs, records | Marks a type as a serialization target. The generator creates full snapshot APIs (`Serialize`, `Deserialize`, `Read`, `TrySerialize`) and baseline delta APIs (`SerializeDelta`, `ReadDelta`, `TrySerializeDelta`) when the packet layout supports them. If `Version > 1`, a 4-bit protocol version header is prepended to the bitstream. |
+| `[Precision(int decimals)]` | Float and double properties/fields | Combines with `[Range]` to quantize floating-point values into fixed-point representations. `[Precision(2)]` multiplies by 100 and reserves only the bits needed for that integer range. |
+| `[SinceVersion(int version)]` | Properties/fields in a `[BitPacket]` | Restricts serialization of the member to streams matching or exceeding the specified version index. |
+| `[BitFieldKey(int key)]` | Properties/fields (and inherited members) | Assigns a stable wire-layout key. When any serializable member in a packet uses `[BitFieldKey]`, every serializable member must use it. Members are written in ascending key order. Keys must be zero or greater and unique across the full inherited packet layout. |
+| `[FixedCount(int count)]` | One-dimensional arrays | Serializes exactly `count` array elements with no length header. The array must be non-null and must have exactly `count` elements at serialization time. |
+| `[Angle(int bits = 16)]` | `float`/`double` members (including bounded array elements) | Quantizes a degree angle in `[0, 360)` into `bits` bits. Out-of-range values throw during `Serialize()`. |
+| `[VectorRange(double minimum, double maximum, int decimals)]` | `Vector2`/`Vector3` members (including bounded array elements) | Quantizes every vector component using the same range and decimal precision. |
+| `[QuaternionSmallestThree(int bitsPerComponent = 16)]` | `Quaternion` members | Normalizes and serializes a quaternion using the smallest-three representation: 2 bits for the omitted largest component index plus three quantized components. |
+| `[BitDiscriminator(int discriminatorBits = 0, int defaultVariant = 0)]` | Union slot properties/fields/parameters | Marks the slot as a compact union. Each `[BitVariant]` declares a concrete `[BitPacket]` type and the discriminator index used to select it. |
+| `[BitVariant(Type variantType, int index)]` | Same target as `[BitDiscriminator]` | Declares one concrete variant for the slot. The index is the discriminator value written before the variant payload. Multiple `[BitVariant]` attributes per slot are allowed. |
 
-*   `[Precision(int decimals)]`
-    *   **Targets**: Float and double properties/fields.
-    *   **Description**: Combines with a `[Range]` attribute to quantize floating-point values into fixed-point representations. For example, `[Precision(2)]` multiplies the value by 100 before writing it as an integer, reserving only the bits needed for that integer range.
+### Standard Data Annotations
 
-*   `[SinceVersion(int version)]`
-    *   **Targets**: Properties or fields in a type marked `[BitPacket]`.
-    *   **Description**: Restricts serialization of the member to streams matching or exceeding the specified version index, ensuring backward compatibility.
+| Attribute | Targets | Description |
+| :--- | :--- | :--- |
+| `[Range(double minimum, double maximum)]` | Integer, float, double properties/fields | Defines the numerical boundaries on the wire. BitPack calculates the absolute minimum bit-width required to store the range size (`maximum - minimum`). |
+| `[MaxLength(int length)]` / `[StringLength(int length)]` | String properties/fields | Dictates the maximum expected character length. BitPack uses this value to size the length header on the wire. |
+| `[MaxLength(int length)]` | One-dimensional arrays | Dictates the maximum element count for variable-length arrays. BitPack writes a compact array length header followed by only the present elements. |
 
-*   `[BitFieldKey(int key)]`
-    *   **Targets**: Properties or fields in a type marked `[BitPacket]`, including serializable members inherited from a base class.
-    *   **Description**: Assigns a stable wire-layout key. When any serializable member in a packet uses `[BitFieldKey]`, every serializable member in that packet must use it. Members are serialized by ascending key instead of declaration order. Keys must be zero or greater and unique within the full inherited packet layout.
+### Member Control Attributes
 
-*   `[FixedCount(int count)]`
-    *   **Targets**: One-dimensional array properties or fields.
-    *   **Description**: Serializes exactly `count` array elements with no length header. The array must be non-null and must have exactly `count` elements at serialization time. Use this for fixed-size inputs, inventory slots, button masks, and other fixed packet shapes.
-
-*   `[Angle(int bits = 16)]`
-    *   **Targets**: `float` or `double` properties/fields, including bounded array elements.
-    *   **Description**: Quantizes a degree angle in the range `[0, 360)` into `bits` bits. Out-of-range values throw during `Serialize()`.
-
-*   `[VectorRange(double minimum, double maximum, int decimals)]`
-    *   **Targets**: `System.Numerics.Vector2` or `System.Numerics.Vector3` properties/fields, including bounded array elements.
-    *   **Description**: Quantizes every vector component using the same range and decimal precision. For example, `[VectorRange(-1024, 1024, 2)]` stores centimeter precision over a shared world-space range.
-
-*   `[QuaternionSmallestThree(int bitsPerComponent = 16)]`
-    *   **Targets**: `System.Numerics.Quaternion` properties/fields.
-    *   **Description**: Normalizes and serializes a quaternion using the compact smallest-three representation: 2 bits for the omitted largest component index plus three quantized components.
-
-### 2. Standard C# Data Annotation Attributes
-
-*   `[Range(double minimum, double maximum)]`
-    *   **Targets**: Integer, float, and double properties/fields.
-    *   **Description**: Defines the numerical boundaries on the wire. BitPack calculates the absolute minimum bit-width required to store the range size (`maximum - minimum`).
-
-*   `[MaxLength(int length)]` or `[StringLength(int length)]`
-    *   **Targets**: String properties/fields.
-    *   **Description**: Dictates the maximum expected character length. BitPack uses this value to allocate the minimum size header required to encode the string length on the wire.
-
-*   `[MaxLength(int length)]`
-    *   **Targets**: One-dimensional array properties or fields.
-    *   **Description**: Dictates the maximum element count for variable-length arrays. BitPack writes a compact array length header followed by only the present elements.
-
-### 3. Member Control Attributes
-
-*   `[JsonIgnore]` or `[IgnoreDataMember]`
-    *   **Targets**: Public properties/fields.
-    *   **Description**: Excludes the decorated public member from serialization.
-
-*   `[DataMember]`
-    *   **Targets**: Non-public (private/internal) properties or fields.
-    *   **Description**: Promotes the decorated non-public member to a serialization target.
+| Attribute | Targets | Description |
+| :--- | :--- | :--- |
+| `[JsonIgnore]` / `[IgnoreDataMember]` | Public properties/fields | Excludes the decorated public member from serialization. |
+| `[DataMember]` | Non-public properties/fields | Promotes the decorated non-public member to a serialization target. |
 
 ---
 
-## Member Selection Code Examples
+## Member Selection
 
-The code example below shows how to control which properties and fields are serialized using ignore and inclusion attributes:
+This example shows how to control which properties and fields are serialized:
 
 ```csharp
 using System;
@@ -238,29 +183,25 @@ using BitPack;
 [BitPacket]
 public partial class PlayerState
 {
-    // Target: Public read-write property.
-    // Serialized by default. Constrained to 0-1000 range (uses 10 bits).
+    // Public read-write property. Serialized by default.
+    // Constrained to 0-1000 range (uses 10 bits).
     [Range(0, 1000)]
     public int PlayerId { get; set; }
 
-    // Target: Public property.
-    // Excluded from serialization using standard JsonIgnore.
+    // Public property excluded using JsonIgnore.
     [JsonIgnore]
     public string TemporarySessionToken { get; set; }
 
-    // Target: Public property.
-    // Excluded from serialization using IgnoreDataMember.
+    // Public property excluded using IgnoreDataMember.
     [IgnoreDataMember]
     public int UIReferenceCount { get; set; }
 
-    // Target: Private field.
-    // Promoted to serialization target using DataMember.
+    // Private field promoted to a serialization target using DataMember.
     [DataMember]
     [Range(0, 100)]
     private int _health = 100;
 
-    // Target: Internal property.
-    // Promoted to serialization target using DataMember.
+    // Internal property promoted using DataMember.
     [DataMember]
     [MaxLength(16)]
     internal string ClanTag { get; set; }
@@ -272,17 +213,17 @@ public partial class PlayerState
 
 ---
 
-## Range-Based Bit Optimization Examples
+## Range-Based Optimization Examples
 
-### 1. Fixed-Point Quantization
+### Fixed-Point Quantization
+
 ```csharp
 [BitPacket]
 public partial struct NavigationSnapshot
 {
-    // Quantized coordinates:
-    // Min: -100.0, Max: 100.0. Range size = 200.0.
+    // Range: -100.0 .. 100.0. Range size = 200.0.
     // Precision: 2 decimal places. Scale = 10^2 = 100.
-    // Integer Range: 0 to (200.0 * 100) = 20000.
+    // Integer range: 0 to (200.0 * 100) = 20000.
     // Bits required: ceil(log2(20001)) = 15 bits on the wire.
     [Range(-100.0, 100.0)]
     [Precision(2)]
@@ -294,8 +235,9 @@ public partial struct NavigationSnapshot
 }
 ```
 
-### 2. Custom Read-Only Structs
-Custom read-only value object structs are supported if they expose a custom `Serialize(BitWriter)` method and a static `Read(BitReader)` factory:
+### Custom Read-Only Structs
+
+Custom read-only value-object structs are supported when they expose a `Serialize(BitWriter)` method and a static `Read(BitReader)` factory:
 
 ```csharp
 public readonly struct NetworkId
@@ -304,10 +246,10 @@ public readonly struct NetworkId
 
     public NetworkId(uint value) => Value = value;
 
-    // Serialization hook called automatically by the generator
-    public void Serialize(BitWriter writer) => writer.WriteULong(Value, 24); // Packs in 24 bits
+    // Serialization hook called automatically by the generator.
+    public void Serialize(BitWriter writer) => writer.WriteULong(Value, 24); // 24 bits
 
-    // Deserialization hook called automatically by the generator
+    // Deserialization hook called automatically by the generator.
     public static NetworkId Read(BitReader reader) => new NetworkId((uint)reader.ReadULong(24));
 }
 
@@ -318,7 +260,8 @@ public partial record NetworkHeader
 }
 ```
 
-### 3. Bounded Arrays
+### Bounded Arrays
+
 Arrays must be one-dimensional and bounded with either `[MaxLength]` or `[FixedCount]` so BitPack can calculate `MaxBits` and `MaxBytes` at compile time.
 
 ```csharp
@@ -338,9 +281,10 @@ public partial record SnapshotBatch
 
 Variable arrays treat `null` as empty during serialization. Fixed arrays must be non-null and exactly the declared length. Array element types use the same attributes as scalar fields, so `[Range]`, `[Precision]`, enum range overrides, nested `[BitPacket]` types, and custom value objects apply to each element.
 
-Current limitations: jagged arrays, multidimensional arrays, `string[]`, interface arrays, and `List<T>` are not supported. Use nested packet types or custom value objects when you need richer repeated structures.
+**Current limitations:** jagged arrays, multidimensional arrays, `string[]`, interface arrays, and `List<T>` are not supported. Use nested packet types or custom value objects when you need richer repeated structures.
 
-### 4. Game Math Codecs
+### Game Math Codecs
+
 Game math codecs target common networking payloads where full 32-bit floats are usually wasteful:
 
 ```csharp
@@ -364,7 +308,9 @@ public partial record PlayerTransform
 }
 ```
 
-`[Angle]` throws for values outside `[0, 360)` instead of wrapping silently. `[VectorRange]` throws when any component is outside the declared range. `[QuaternionSmallestThree]` normalizes non-zero quaternions during serialization and rejects zero-length quaternions.
+- `[Angle]` throws for values outside `[0, 360)` instead of wrapping silently.
+- `[VectorRange]` throws when any component is outside the declared range.
+- `[QuaternionSmallestThree]` normalizes non-zero quaternions during serialization and rejects zero-length quaternions.
 
 Game math codecs also work with bounded arrays when the codec attribute is placed on the array member:
 
@@ -378,12 +324,13 @@ public partial record AimHistory
 }
 ```
 
-### 5. Delta / Baseline Serialization
+### Delta / Baseline Serialization
+
 Delta serialization writes only fields that differ from a baseline packet. Each field contributes one changed bit; changed fields then write their normal BitPack payload, while unchanged fields write no payload.
 
 ```csharp
 var baseline = new PlayerInput { Tick = 100, AimAngle = 90, IsMoving = false };
-var current = new PlayerInput { Tick = 101, AimAngle = 90, IsMoving = true };
+var current  = new PlayerInput { Tick = 101, AimAngle = 90, IsMoving = true };
 
 Span<byte> delta = stackalloc byte[PlayerInput.MaxDeltaBytes];
 current.TrySerializeDelta(baseline, delta, out var bytesWritten);
@@ -392,19 +339,20 @@ var reader = new BitSpanReader(delta[..bytesWritten]);
 var restored = PlayerInput.ReadDelta(baseline, ref reader);
 ```
 
-Delta payloads are not standalone. The reader must apply the payload to the same baseline state that the writer used, and normal full `Serialize`/`Read` snapshots should be sent whenever a peer needs a new baseline.
+Delta payloads are **not standalone**. The reader must apply the payload to the same baseline state that the writer used, and full `Serialize`/`Read` snapshots should be sent whenever a peer needs a new baseline.
 
 Generated delta APIs include:
 
-*   `SerializeDelta(baseline, BitWriter writer)`
-*   `SerializeDeltaUnchecked(baseline, BitWriter writer)`
-*   `ReadDelta(baseline, BitReader reader)`
-*   `TrySerializeDelta(baseline, byte[] buffer, out int bytesWritten)`
-*   Span equivalents for span-compatible packets.
+- `SerializeDelta(baseline, BitWriter writer)`
+- `SerializeDeltaUnchecked(baseline, BitWriter writer)`
+- `ReadDelta(baseline, BitReader reader)`
+- `TrySerializeDelta(baseline, byte[] buffer, out int bytesWritten)`
+- Span equivalents for span-compatible packets.
 
-`MaxDeltaBits` and `MaxDeltaBytes` report worst-case delta size, which is the full snapshot size plus one changed bit per field. Actual deltas are often much smaller. Packets with interface-typed fields do not emit delta APIs yet because changed interface fields need an explicit concrete factory or clone contract.
+`MaxDeltaBits` and `MaxDeltaBytes` report worst-case delta size (full snapshot size plus one changed bit per field). Actual deltas are often much smaller. Packets with interface-typed fields do not emit delta APIs yet because changed interface fields need an explicit concrete factory or clone contract.
 
-### 6. Compact Unions / Discriminators
+### Compact Unions / Discriminators
+
 A compact union pairs a property with a tiny on-wire discriminator that lets the decoder pick the concrete variant type purely from the bit stream. Unlike a plain `IBitSerializable` interface field, unions do not require the receiver to know the concrete type in advance.
 
 ```csharp
@@ -436,7 +384,13 @@ public partial class PlayerInputPacket
 }
 ```
 
-The wire shape for the union slot is `[discriminatorBits bits: variant index] [variant payload per its [BitPacket] layout]`. With two variants declared, the generator defaults `discriminatorBits` to 1; with up to four variants it becomes 2. Use `[BitDiscriminator(discriminatorBits: N)]` to override.
+The wire shape for the union slot is:
+
+```
+[discriminatorBits bits: variant index] [variant payload per its [BitPacket] layout]
+```
+
+With two variants declared, the generator defaults `discriminatorBits` to 1; with up to four variants it becomes 2. Use `[BitDiscriminator(discriminatorBits: N)]` to override.
 
 Generated delta APIs treat a union slot as a single field. One changed bit covers both the discriminator and the variant payload — if either differs from the baseline, the new discriminator and full payload are written. Span and delta APIs both work for union slots automatically.
 
@@ -457,8 +411,8 @@ Properties (and `[DataMember]`-promoted fields) are serialized **in declaration 
 public partial record PlayerInput
 {
     [Range(0, 360)] public int AimAngle { get; set; }   // Offset 0 bits
-    public bool IsMoving { get; set; }                    // Offset 9 bits
-    [MaxLength(16)] public string Name { get; set; }     // Offset 10 bits
+    public bool IsMoving { get; set; }                   // Offset 9 bits
+    [MaxLength(16)] public string Name { get; set; }    // Offset 10 bits
 }
 ```
 
@@ -470,7 +424,9 @@ The wire layout for a single packet is:
 
 If the packet has `[BitPacket(Version = N)]` with `N > 1`, a 4-bit version header is prepended at offset 0 before all properties.
 
-Delta payloads use the same field order, but each field is preceded by a 1-bit changed flag. If the flag is `0`, the reader copies that field from the supplied baseline. If the flag is `1`, the reader consumes the normal field payload from the stream.
+**Delta payloads** use the same field order, but each field is preceded by a 1-bit changed flag. If the flag is `0`, the reader copies that field from the supplied baseline. If the flag is `1`, the reader consumes the normal field payload from the stream.
+
+**Union payloads** interleave a small discriminator before each variant payload, sharing the host packet's bit stream.
 
 The deserializer reads properties in the same sequential order, consuming exactly the same number of bits per property. Any mismatch in order, type, or bit-width between writer and reader produces **silent data corruption** — not an error message.
 
@@ -508,6 +464,7 @@ This still writes `AimAngle` first, then `IsMoving`, even though the source decl
 | `[VectorRange(min, max, d)] Vector2` | `2 × component bits` | Unsupported without codec |
 | `[VectorRange(min, max, d)] Vector3` | `3 × component bits` | Unsupported without codec |
 | `[QuaternionSmallestThree(b)] Quaternion` | `2 + 3b` bits | Unsupported without codec |
+| `[BitDiscriminator] T` | `discriminatorBits + max(variant MaxBits)` | Unsupported without `[BitVariant]` |
 
 For a variable bounded array like `[MaxLength(4)][Range(0, 31)] int[]`, BitPack writes a 3-bit array length header followed by 5 bits per present element. For a fixed array like `[FixedCount(4)] bool[]`, BitPack writes exactly 4 bits with no length header.
 
@@ -519,7 +476,7 @@ For `[VectorRange]`, component bits are calculated as `⌈log₂((max − min) �
 
 ### Protocol Version Gating
 
-Use `[SinceVersion]` to add new fields to live protocols without breaking backwards compatibility:
+Use `[SinceVersion]` to add new fields to live protocols without breaking backward compatibility:
 
 ```csharp
 [BitPacket(Version = 2)] // Prepends a 4-bit header indicating V2
@@ -533,10 +490,10 @@ public partial record PlayerInput
 }
 ```
 
-### Stream Gating Rules
+**Stream gating rules:**
 
-1.  **V2 Client to V2 Server**: Version 2 header is sent. Both `AimAngle` and `ExtraBoost` are read and written.
-2.  **V1 Client to V2 Server**: Version 1 header is sent. The server reads `AimAngle`, sees `packetVersion (1) < SinceVersion (2)`, skips reading `ExtraBoost`, and defaults it to `false`. The bitstream remains aligned.
+1. **V2 Client to V2 Server**: Version 2 header is sent. Both `AimAngle` and `ExtraBoost` are read and written.
+2. **V1 Client to V2 Server**: Version 1 header is sent. The server reads `AimAngle`, sees `packetVersion (1) < SinceVersion (2)`, skips reading `ExtraBoost`, and defaults it to `false`. The bitstream remains aligned.
 
 ### Compatibility Pitfalls
 
@@ -551,16 +508,16 @@ Properties are serialized in declaration order unless `[BitFieldKey]` is used. R
 [BitPacket]
 public partial record PlayerInput
 {
-    public bool IsMoving { get; set; }    // bit 0
-    public int AimAngle { get; set; }      // bits 1–9
+    public bool IsMoving { get; set; }   // bit 0
+    public int AimAngle { get; set; }   // bits 1–9
 }
 
 // Version B — INCOMPATIBLE (reordered)
 [BitPacket]
 public partial record PlayerInput
 {
-    public int AimAngle { get; set; }      // NOW bit 0 — misaligned!
-    public bool IsMoving { get; set; }    // NOW bit 9 — reads garbage
+    public int AimAngle { get; set; }    // NOW bit 0 — misaligned!
+    public bool IsMoving { get; set; }   // NOW bit 9 — reads garbage
 }
 ```
 
@@ -620,7 +577,7 @@ Renaming a property has no effect on the wire format. BitPack serializes by **de
 | `int` → `long` | 32 → 64 bits (or constrained bit-width changes). Shift. |
 | `float` → `[Range][Precision] float` | 32 bits → range bits. Shift. |
 
-#### Compatibility Decision Table
+### Compatibility Decision Table
 
 | Change | Safe? | Mitigation |
 | :--- | :--- | :--- |
@@ -632,14 +589,14 @@ Renaming a property has no effect on the wire format. BitPack serializes by **de
 | Rename a property | **Yes** | No action needed |
 | Change a `[BitFieldKey]` value | **No** | Treat as a wire-layout change |
 | Change `[Range]` on existing property | **No** | Fork to a new packet type, or bump version and add a new constrained property at end while deprecating the old one |
-| Change `[MaxLength]` on existing property | **No** | Same as range change |
+| Change `[MaxLength]` on existing string property | **No** | Same as range change |
 | Change `[MaxLength]` or `[FixedCount]` on an array | **No** | Add a new version-gated array field and keep the old one |
 | Change game math codec settings | **No** | Add a new version-gated field and keep the old one |
 | Change property type (`int` → `long`) | **No** | Add new property at end; keep old as unused |
 
-#### Detection at Runtime
+### Detection at Runtime
 
-BitPack cannot detect wire format mismatches at runtime (there is no schema negotiation). The recommended approach is:
+BitPack cannot detect wire-format mismatches at runtime (there is no schema negotiation). The recommended approach is:
 
 1. **Protocol negotiation**: Exchange a version handshake at connection time (independent of BitPack). The server rejects clients with incompatible packet versions.
 2. **Packet type IDs**: Prefix each packet with a small integer identifying its schema version, checked before deserialization.
@@ -661,16 +618,6 @@ public void PlayerInput_WireFormat_IsStable()
 
 ---
 
-## Diagnostic Rules
-
-BitPack enforces strict compile-time checks to prevent unoptimized layouts or invalid configurations:
-
-*   **Error BP0001**: Raised when a property type is not packable (lacks BitPacket attribute, does not implement custom serialization hooks, or is dynamic/object), or when a property's `SinceVersion` exceeds its parent's version. Also raised when a property target lacks a getter accessor, or lacks a setter/init accessor while not matching any constructor parameters (preventing successful serialization/deserialization).
-*   **Warning BP0002**: Raised when a primitive integer or string does not specify optimization attributes (such as Range or MaxLength), indicating that full type storage (unquantized) will be used as a fallback.
-*   **Error BP0003**: Raised when `[BitFieldKey]` usage is invalid: mixed keyed and unkeyed serializable members, duplicate keys, or negative keys.
-*   **Error BP0004**: Raised when array bounds are invalid: missing `[MaxLength]`/`[FixedCount]`, both bounds specified, negative/zero fixed counts, jagged arrays, multidimensional arrays, `string[]`, or interface arrays.
-*   **Error BP0005**: Raised when game math codec attributes are invalid or applied to unsupported types.
-
 ## Annotations and Runtime Safety
 
 ### Why Annotations Matter
@@ -680,11 +627,12 @@ BitPack's bit-width optimization is driven entirely by compile-time attributes. 
 | Attribute | Effect on wire size |
 | :--- | :--- |
 | `[Range(0, 1000)]` | Stores the value offset in exactly ⌈log₂(1001)⌉ = 10 bits instead of 32 |
-| `[MaxLength(16)]` | Allocates only ⌈log₂(16×4)⌉ = 6 bits for the string length header |
+| `[MaxLength(16)]` (string) | Allocates only ⌈log₂(16×4)⌉ = 6 bits for the string length header |
 | `[Precision(2)]` (with `[Range]`) | Quantizes a `float`/`double` into a fixed-point integer needing only range bits |
 | `[Angle(16)]` | Stores a degree angle in 16 bits instead of 32 |
 | `[VectorRange(-100, 100, 2)]` | Stores each `Vector2`/`Vector3` component as fixed-point range bits |
 | `[QuaternionSmallestThree(16)]` | Stores a quaternion in 50 bits instead of 128 |
+| `[BitDiscriminator]` + `[BitVariant]` | Adds `discriminatorBits + max(variant MaxBits)` instead of an interface reference |
 
 **Enums are detected automatically.** BitPack calculates the minimum bit-width from the largest declared enum field value. To override this (e.g., to reserve headroom for future values), apply `[Range]` directly on the enum property:
 
@@ -705,9 +653,10 @@ public enum GameState { Idle = 0, Running = 1, Paused = 2 }
 
 ### Runtime Mismatch and Overflow Behaviour
 
-BitPack trusts the annotations at face value. Assigning values that exceed declared constraints throws an `ArgumentOutOfRangeException` at `Serialize()` time for **all** constrained types — strings, integers, floats, and enums:
+BitPack trusts the annotations at face value. Assigning values that exceed declared constraints throws an `ArgumentOutOfRangeException` at `Serialize()` time for **all** constrained types — strings, integers, floats, and enums.
 
 **Strings — exceeds `[MaxLength]` or `[StringLength]`:**
+
 ```csharp
 [BitPacket]
 public partial record PlayerPacket
@@ -721,6 +670,7 @@ new PlayerPacket { Name = "This string is way longer than sixteen characters" };
 ```
 
 **Arrays — exceeds `[MaxLength]` or violates `[FixedCount]`:**
+
 ```csharp
 [BitPacket]
 public partial record InputPacket
@@ -741,6 +691,7 @@ new InputPacket { EntityIds = Array.Empty<int>(), Buttons = new bool[2] }.Serial
 ```
 
 **Integers — outside `[Range]`:**
+
 ```csharp
 [BitPacket]
 public partial record PlayerPacket
@@ -755,6 +706,7 @@ packet.Serialize(writer);
 ```
 
 **Enums — auto-detected or `[Range]`-declared:**
+
 ```csharp
 [BitPacket]
 public partial record GamePacket
@@ -771,7 +723,7 @@ public partial record GamePacket
 new GamePacket { State = (GameState)99 };
 ```
 
-**Floats/doubles with `[Precision]`** — values outside the `[Range]` throw identically.
+**Floats/doubles with `[Precision]`** throw identically for values outside the `[Range]`.
 
 **Game math codecs** — `[Angle]` throws outside `[0, 360)`, `[VectorRange]` throws when any component is outside the declared range, and `[QuaternionSmallestThree]` throws for zero-length quaternions:
 
@@ -802,13 +754,16 @@ BitPack cannot validate runtime values at compile time. Guard your setters or va
 
 ## Architectural Guidance
 
-### 1. Object Instantiation and Constructors
-BitPack supports C# object initialization patterns:
-*   **Parameterless Constructors**: If a class or record exposes a parameterless constructor, the static `Read` factory instantiates the type and sets properties using object initializers.
-*   **Init-Only and Required Properties**: Properties marked `init` or `required` are initialized during object construction in the static `Read(BitReader)` factory.
-*   **Parameterized and Primary Constructors**: If a type defines a parameterized constructor (such as C# records with primary constructors), the generator matches the constructor parameter names to the serialization targets (case-insensitive). It parses the values from the bitstream first, instantiates the type using the matched constructor, and sets any remaining targets via object initializers.
+### Object Instantiation and Constructors
 
-### 2. Inheritance and Shared Base Packets
+BitPack supports C# object initialization patterns:
+
+- **Parameterless Constructors**: If a class or record exposes a parameterless constructor, the static `Read` factory instantiates the type and sets properties using object initializers.
+- **Init-Only and Required Properties**: Properties marked `init` or `required` are initialized during object construction in the static `Read(BitReader)` factory.
+- **Parameterized and Primary Constructors**: If a type defines a parameterized constructor (such as C# records with primary constructors), the generator matches the constructor parameter names to the serialization targets (case-insensitive). It parses the values from the bitstream first, instantiates the type using the matched constructor, and sets any remaining targets via object initializers.
+
+### Inheritance and Shared Base Packets
+
 Concrete `[BitPacket]` classes include serializable members inherited from base classes. This lets you define common packet metadata once:
 
 ```csharp
@@ -836,10 +791,12 @@ public partial class PlayerInputPacket : BaseGamePacket
 
 Base members are discovered before derived members, and keyed packets are serialized by ascending `[BitFieldKey]` across the full inherited layout. Do not mark abstract base classes with `[BitPacket]`; only concrete packet types should be packet targets.
 
-### 3. Character and String Encoding
+### String Encoding
+
 All string properties are serialized using UTF-8 encoding. This supports international characters and Unicode symbols. Temporary byte buffers are rented from `ArrayPool<byte>.Shared` when string payloads need encoding or decoding.
 
-### 4. Memory and Span APIs
+### Memory and Span APIs
+
 `BitWriter` and `BitReader` support both array and memory-backed buffers:
 
 ```csharp
@@ -862,26 +819,146 @@ var reader = new BitSpanReader(buffer[..writer.BytesWritten]);
 var restored = PlayerInput.Read(ref reader);
 ```
 
-Generated span overloads are emitted only when every field can be serialized with built-in span-compatible codecs. Packets containing interface fields, nested packet fields, or custom value objects without span hooks keep the classic `BitWriter`/`BitReader` APIs.
+Generated span overloads are emitted only when every field can be serialized with built-in span-compatible codecs. Packets containing interface fields (including `[BitDiscriminator]` slots whose variants are not all span-compatible), nested packet fields with custom hooks, or unsupported custom value objects keep the classic `BitWriter`/`BitReader` APIs.
 
-### 5. Encryption and Compression Pipelines
-BitPack is engineered solely for structural packet size optimization (fitting fields into precise bit configurations). 
-*   **Compression**: Generic compression algorithms (like Brotli, Deflate, or Gzip) operate on byte patterns. Trying to compress individual bits during serialization is counterproductive.
-*   **Encryption**: Symmetric encryption (like AES-GCM or ChaCha20) must be applied to the completed byte array.
-*   **Pipeline Recommendation**:
-    ```text
-    [C# Objects] ──> BitPack (Serialize) ──> [Raw Bytes] ──> Encrypt/Compress ──> [UDP/TCP Socket]
-    ```
-    If encryption or compression are required, they should be applied to the written byte range, e.g. `buffer.AsSpan(0, writer.BytesWritten)`.
+### Encryption and Compression Pipelines
 
-### 6. Performance Design
+BitPack is engineered solely for structural packet size optimization (fitting fields into precise bit configurations).
+
+- **Compression**: Generic compression algorithms (like Brotli, Deflate, or Gzip) operate on byte patterns. Trying to compress individual bits during serialization is counterproductive.
+- **Encryption**: Symmetric encryption (like AES-GCM or ChaCha20) must be applied to the completed byte array.
+- **Pipeline Recommendation**:
+  ```text
+  [C# Objects] ──> BitPack (Serialize) ──> [Raw Bytes] ──> Encrypt/Compress ──> [UDP/TCP Socket]
+  ```
+  If encryption or compression are required, they should be applied to the written byte range, e.g. `buffer.AsSpan(0, writer.BytesWritten)`.
+
+### Performance Design
 
 BitPack's performance is achieved through several deliberate design choices:
 
-*   **Tiered bit-width writes**: The `WriteLong`/`ReadLong` core methods branch on the total bit span (`bitOffset + bitCount`), dispatching to byte (≤8 bits), `ushort` (≤16), `uint` (≤32), or `ulong` (≤64) read-modify-write paths. This avoids full 64-bit memory traffic for narrow values like booleans or range-constrained integers.
-*   **Low-allocation paths**: Decimal serialization uses stack storage on modern TFMs, and string encoding/decoding rents temporary buffers from `ArrayPool<byte>.Shared`.
-*   **Span-based APIs throughout**: `BitSpanWriter`, `BitSpanReader`, `WriteBytes`, and `ReadBytes` operate on `Span<byte>` / `ReadOnlySpan<byte>`, enabling stackalloc buffers and direct socket/pipeline integration.
-*   **Compile-time code generation**: The Roslyn incremental source generator emits specialized serialization logic per type, avoiding any runtime reflection or dynamic code generation.
+- **Tiered bit-width writes**: The `WriteLong`/`ReadLong` core methods branch on the total bit span (`bitOffset + bitCount`), dispatching to byte (≤8 bits), `ushort` (≤16), `uint` (≤32), or `ulong` (≤64) read-modify-write paths. This avoids full 64-bit memory traffic for narrow values like booleans or range-constrained integers.
+- **Low-allocation paths**: Decimal serialization uses stack storage on modern TFMs, and string encoding/decoding rents temporary buffers from `ArrayPool<byte>.Shared`.
+- **Span-based APIs throughout**: `BitSpanWriter`, `BitSpanReader`, `WriteBytes`, and `ReadBytes` operate on `Span<byte>` / `ReadOnlySpan<byte>`, enabling stackalloc buffers and direct socket/pipeline integration.
+- **Compile-time code generation**: The Roslyn incremental source generator emits specialized serialization logic per type, avoiding any runtime reflection or dynamic code generation.
+
+---
+
+## Diagnostics
+
+BitPack enforces strict compile-time checks to prevent unoptimized layouts or invalid configurations:
+
+| Diagnostic | Severity | Description |
+| :--- | :--- | :--- |
+| `BP0001` | Error | A property type is not packable (lacks `[BitPacket]`, does not implement custom serialization hooks, or is `dynamic`/`object`), or a property's `SinceVersion` exceeds its parent's version. Also raised when a property target lacks a getter accessor, or lacks a setter/init accessor while not matching any constructor parameters (preventing successful serialization/deserialization). |
+| `BP0002` | Warning | A primitive integer or string does not specify optimization attributes (such as `[Range]` or `[MaxLength]`). Full type storage (unquantized) will be used as a fallback. |
+| `BP0003` | Error | `[BitFieldKey]` usage is invalid: mixed keyed and unkeyed serializable members, duplicate keys, or negative keys. |
+| `BP0004` | Error | Array bounds are invalid: missing `[MaxLength]`/`[FixedCount]`, both bounds specified, negative/zero fixed counts, jagged arrays, multidimensional arrays, `string[]`, or interface arrays. |
+| `BP0005` | Error | Game math codec attributes are invalid or applied to unsupported types. |
+| `BP0006` | Error | A `[BitDiscriminator]` slot is misconfigured: empty `[BitVariant]` list, a variant that is not marked `[BitPacket]`, duplicate discriminator indices, or a declared `discriminatorBits` that cannot address the highest declared index. |
+
+---
+
+## Benchmark Results
+
+The following benchmarks compare serialization and deserialization of two packet structures under **High Process Priority** using **.NET 10.0.9**:
+
+1. **Simple Packet (Primitive-only)**: Contains 12 properties (integer, float, double, byte, sbyte, short, ushort, ticks, and boolean states) with no string fields.
+2. **Complex Packet**: Contains 12 properties including strings, DateTimes, enums, and nested structs.
+
+### Running Benchmarks
+
+Run the full benchmark suite in Release mode from the repository root:
+
+```bash
+dotnet run -c Release -f net10.0 --project BitPack.Benchmarks/BitPack.Benchmarks.csproj
+```
+
+BenchmarkDotNet will prompt for which benchmarks to run. Use `*` to run all benchmarks, or enter a filter such as `*Simple*`, `*Complex*`, `*Serialize*`, or `*Deserialize*` to run a subset.
+
+Results are written to `BenchmarkDotNet.Artifacts/results/` as Markdown, CSV, and HTML reports. For the most stable numbers, close other heavy applications and avoid using the machine while the benchmarks run.
+
+### Simple Packet Benchmarks
+
+#### Wire Payload Sizes
+
+| Serializer | Wire Size (Bytes) | Bandwidth Saved vs MessagePack | Bandwidth Saved vs JSON |
+| :--- | :---: | :---: | :---: |
+| **BitPack** | **17 bytes** | **55.3%** | **89.7%** |
+| MemoryPack | 48 bytes | -26.3% | 70.9% |
+| MessagePack | 38 bytes | Reference | 77.0% |
+| protobuf-net | 50 bytes | -31.6% | 69.7% |
+| System.Text.Json | 165 bytes | -334.2% | Reference |
+
+#### Serialization Scenarios & Allocations
+
+*BenchmarkDotNet v0.15.8, .NET 10.0.9 (X64 RyuJIT x86-64-v3). Deserialization benchmarks consume the full deserialized object with BenchmarkDotNet's `Consumer`.*
+
+| Method | Scenario | Mean Speed | Median Speed | Managed Allocated Memory |
+| :--- | :--- | :---: | :---: | :---: |
+| **Serialize_Simple_BitPack_ReusableBuffer** | Reused caller buffer | **27.639 ns** | **26.864 ns** | **0 B** |
+| Serialize_Simple_BitPack_FreshBuffer | Fresh byte array | 31.995 ns | 31.773 ns | 88 B |
+| Serialize_Simple_BitPack_PooledBuffer | ArrayPool byte array | 36.041 ns | 35.799 ns | 40 B |
+| Serialize_Simple_MemoryPack_ReusableWriter | Reused writer | 3.182 ns | 3.167 ns | 0 B |
+| Serialize_Simple_MemoryPack_FreshWriter | Fresh writer | 15.431 ns | 15.445 ns | 312 B |
+| Serialize_Simple_MessagePack_ReusableWriter | Reused writer | 36.159 ns | 35.943 ns | 0 B |
+| Serialize_Simple_MessagePack_FreshWriter | Fresh writer | 50.333 ns | 49.903 ns | 312 B |
+| Serialize_Simple_ProtoBuf_ReusableBuffer | Reused buffer | 151.106 ns | 151.534 ns | 64 B |
+| Serialize_Simple_ProtoBuf_FreshBuffer | Fresh buffer | 162.467 ns | 161.377 ns | 344 B |
+| Serialize_Simple_JsonContext_ReusableBuffer | Reused buffer | 250.478 ns | 246.602 ns | 512 B |
+| Serialize_Simple_JsonContext_FreshBuffer | Fresh buffer | 260.442 ns | 256.496 ns | 792 B |
+
+#### Deserialization Speed & Allocations
+
+| Method | Mean Speed | Median Speed | Managed Allocated Memory |
+| :--- | :---: | :---: | :---: |
+| **Deserialize_Simple_BitPack** | **21.481 ns** | **21.431 ns** | **0 B** |
+| Deserialize_Simple_MemoryPack | 1.089 ns | 1.088 ns | 0 B |
+| Deserialize_Simple_MessagePack | 53.104 ns | 52.062 ns | 0 B |
+| Deserialize_Simple_ProtoBuf | 149.046 ns | 149.089 ns | 88 B |
+| Deserialize_Simple_JsonContext | 402.547 ns | 401.944 ns | 64 B |
+
+### Complex Packet Benchmarks
+
+#### Wire Payload Sizes
+
+| Serializer | Wire Size (Bytes) | Bandwidth Saved vs MessagePack | Bandwidth Saved vs JSON |
+| :--- | :---: | :---: | :---: |
+| **BitPack** | **68 bytes** | **40.9%** | **83.2%** |
+| MemoryPack | 139 bytes | -20.9% | 65.7% |
+| MessagePack | 115 bytes | Reference | 71.6% |
+| protobuf-net | 138 bytes | -20.0% | 65.9% |
+| System.Text.Json | 405 bytes | -252.2% | Reference |
+
+#### Serialization Scenarios & Allocations
+
+*BenchmarkDotNet v0.15.8, .NET 10.0.9 (X64 RyuJIT x86-64-v3).*
+
+| Method | Scenario | Mean Speed | Median Speed | Managed Allocated Memory |
+| :--- | :--- | :---: | :---: | :---: |
+| **Serialize_Complex_BitPack_ReusableBuffer** | Reused caller buffer | **106.775 ns** | **106.514 ns** | **0 B** |
+| Serialize_Complex_BitPack_FreshBuffer | Fresh byte array | 135.982 ns | 135.772 ns | 296 B |
+| Serialize_Complex_BitPack_PooledBuffer | ArrayPool byte array | 114.985 ns | 114.826 ns | 40 B |
+| Serialize_Complex_MemoryPack_ReusableWriter | Reused writer | 27.278 ns | 27.204 ns | 0 B |
+| Serialize_Complex_MemoryPack_FreshWriter | Fresh writer | 45.359 ns | 43.821 ns | 312 B |
+| Serialize_Complex_MessagePack_ReusableWriter | Reused writer | 103.857 ns | 103.753 ns | 0 B |
+| Serialize_Complex_MessagePack_FreshWriter | Fresh writer | 129.704 ns | 128.765 ns | 312 B |
+| Serialize_Complex_ProtoBuf_ReusableBuffer | Reused buffer | 343.284 ns | 343.380 ns | 64 B |
+| Serialize_Complex_ProtoBuf_FreshBuffer | Fresh buffer | 362.311 ns | 361.694 ns | 344 B |
+| Serialize_Complex_JsonContext_ReusableBuffer | Reused buffer | 952.025 ns | 947.801 ns | 5016 B |
+| Serialize_Complex_JsonContext_FreshBuffer | Fresh buffer | 1,016.394 ns | 1,010.441 ns | 6280 B |
+
+#### Deserialization Speed & Allocations
+
+| Method | Mean Speed | Median Speed | Managed Allocated Memory |
+| :--- | :---: | :---: | :---: |
+| **Deserialize_Complex_BitPack** | **104.865 ns** | **103.978 ns** | **104 B** |
+| Deserialize_Complex_MemoryPack | 42.235 ns | 41.502 ns | 104 B |
+| Deserialize_Complex_MessagePack | 196.158 ns | 192.539 ns | 104 B |
+| Deserialize_Complex_ProtoBuf | 390.517 ns | 389.103 ns | 192 B |
+| Deserialize_Complex_JsonContext | 1,200.014 ns | 1,184.467 ns | 792 B |
+
+*Note on allocations:* The 104 bytes allocated during `Deserialize_Complex_BitPack` represent the two deserialized `string` objects themselves (`"Alex"` and `"Multiplayer Engine Pilot"`). BitPack's deserializer internals perform 0 garbage/helper allocations.
 
 ---
 
@@ -891,7 +968,7 @@ Contributions are welcome. Please open an issue first to discuss what you'd like
 
 ### Prerequisites
 
-*   [.NET SDK 10.0](https://dotnet.microsoft.com/download) (or later)
+- [.NET SDK 10.0](https://dotnet.microsoft.com/download) (or later)
 
 ### Build
 
@@ -914,12 +991,12 @@ See [Running Benchmarks](#running-benchmarks).
 | Directory | Description |
 | :--- | :--- |
 | `BitPack/` | Core library — `BitWriter`, `BitReader`, attributes, and the `IBitSerializable` interface |
-| `BitPack.Generator/` | Roslyn incremental source generator — emits `Serialize`, `Deserialize`, and `Read` methods at compile time |
+| `BitPack.Generator/` | Roslyn incremental source generator — emits `Serialize`, `Deserialize`, `Read`, and the span/delta/union API surface at compile time |
 | `BitPack.Tests/` | xUnit test suite covering all serialization scenarios |
 | `BitPack.Benchmarks/` | BenchmarkDotNet harness comparing BitPack against other serializers |
 
 ### Code Style
 
-*   All public API methods are annotated `[MethodImpl(MethodImplOptions.AggressiveInlining)]`.
-*   Internal hot-path methods use `Unsafe` intrinsics for unaligned memory access.
-*   The library targets `netstandard2.1` for broad compatibility while the generator targets `netstandard2.0`.
+- All public API methods are annotated `[MethodImpl(MethodImplOptions.AggressiveInlining)]`.
+- Internal hot-path methods use `Unsafe` intrinsics for unaligned memory access.
+- The library targets `netstandard2.1` for broad compatibility while the generator targets `netstandard2.0`.
