@@ -68,27 +68,27 @@ Results are written to `BenchmarkDotNet.Artifacts/results/` as Markdown, CSV, an
 
 | Method | Scenario | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :--- | :---: | :---: | :---: |
-| **Serialize_Simple_BitPack_ReusableBuffer** | Reused caller buffer | **24.661 ns** | **24.628 ns** | **0 B** |
-| Serialize_Simple_BitPack_FreshBuffer | Fresh byte array | 33.033 ns | 32.654 ns | 88 B |
-| Serialize_Simple_BitPack_PooledBuffer | ArrayPool byte array | 34.286 ns | 34.335 ns | 40 B |
-| Serialize_Simple_MemoryPack_ReusableWriter | Reused writer | 2.729 ns | 2.704 ns | 0 B |
-| Serialize_Simple_MemoryPack_FreshWriter | Fresh writer | 15.673 ns | 15.662 ns | 312 B |
-| Serialize_Simple_MessagePack_ReusableWriter | Reused writer | 32.815 ns | 32.613 ns | 0 B |
-| Serialize_Simple_MessagePack_FreshWriter | Fresh writer | 49.691 ns | 49.435 ns | 312 B |
-| Serialize_Simple_ProtoBuf_ReusableBuffer | Reused buffer | 149.947 ns | 150.308 ns | 64 B |
-| Serialize_Simple_ProtoBuf_FreshBuffer | Fresh buffer | 171.755 ns | 171.815 ns | 344 B |
-| Serialize_Simple_JsonContext_ReusableBuffer | Reused buffer | 247.656 ns | 243.170 ns | 512 B |
-| Serialize_Simple_JsonContext_FreshBuffer | Fresh buffer | 265.664 ns | 264.727 ns | 792 B |
+| **Serialize_Simple_BitPack_ReusableBuffer** | Reused caller buffer | **27.639 ns** | **26.864 ns** | **0 B** |
+| Serialize_Simple_BitPack_FreshBuffer | Fresh byte array | 31.995 ns | 31.773 ns | 88 B |
+| Serialize_Simple_BitPack_PooledBuffer | ArrayPool byte array | 36.041 ns | 35.799 ns | 40 B |
+| Serialize_Simple_MemoryPack_ReusableWriter | Reused writer | 3.182 ns | 3.167 ns | 0 B |
+| Serialize_Simple_MemoryPack_FreshWriter | Fresh writer | 15.431 ns | 15.445 ns | 312 B |
+| Serialize_Simple_MessagePack_ReusableWriter | Reused writer | 36.159 ns | 35.943 ns | 0 B |
+| Serialize_Simple_MessagePack_FreshWriter | Fresh writer | 50.333 ns | 49.903 ns | 312 B |
+| Serialize_Simple_ProtoBuf_ReusableBuffer | Reused buffer | 151.106 ns | 151.534 ns | 64 B |
+| Serialize_Simple_ProtoBuf_FreshBuffer | Fresh buffer | 162.467 ns | 161.377 ns | 344 B |
+| Serialize_Simple_JsonContext_ReusableBuffer | Reused buffer | 250.478 ns | 246.602 ns | 512 B |
+| Serialize_Simple_JsonContext_FreshBuffer | Fresh buffer | 260.442 ns | 256.496 ns | 792 B |
 
 #### Deserialization Speed & Allocations
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Deserialize_Simple_BitPack** | **22.222 ns** | **22.039 ns** | **0 B** |
-| Deserialize_Simple_MemoryPack | 1.113 ns | 1.101 ns | 0 B |
-| Deserialize_Simple_MessagePack | 50.954 ns | 50.319 ns | 0 B |
-| Deserialize_Simple_ProtoBuf | 151.719 ns | 151.713 ns | 88 B |
-| Deserialize_Simple_JsonContext | 416.543 ns | 411.595 ns | 64 B |
+| **Deserialize_Simple_BitPack** | **21.481 ns** | **21.431 ns** | **0 B** |
+| Deserialize_Simple_MemoryPack | 1.089 ns | 1.088 ns | 0 B |
+| Deserialize_Simple_MessagePack | 53.104 ns | 52.062 ns | 0 B |
+| Deserialize_Simple_ProtoBuf | 149.046 ns | 149.089 ns | 88 B |
+| Deserialize_Simple_JsonContext | 402.547 ns | 401.944 ns | 64 B |
 
 ---
 
@@ -108,27 +108,27 @@ Results are written to `BenchmarkDotNet.Artifacts/results/` as Markdown, CSV, an
 
 | Method | Scenario | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :--- | :---: | :---: | :---: |
-| **Serialize_Complex_BitPack_ReusableBuffer** | Reused caller buffer | **119.774 ns** | **118.002 ns** | **0 B** |
-| Serialize_Complex_BitPack_FreshBuffer | Fresh byte array | 148.823 ns | 148.586 ns | 296 B |
-| Serialize_Complex_BitPack_PooledBuffer | ArrayPool byte array | 128.342 ns | 128.371 ns | 40 B |
-| Serialize_Complex_MemoryPack_ReusableWriter | Reused writer | 28.155 ns | 27.820 ns | 0 B |
-| Serialize_Complex_MemoryPack_FreshWriter | Fresh writer | 48.732 ns | 49.070 ns | 312 B |
-| Serialize_Complex_MessagePack_ReusableWriter | Reused writer | 106.612 ns | 106.408 ns | 0 B |
-| Serialize_Complex_MessagePack_FreshWriter | Fresh writer | 137.330 ns | 136.413 ns | 312 B |
-| Serialize_Complex_ProtoBuf_ReusableBuffer | Reused buffer | 386.621 ns | 370.928 ns | 64 B |
-| Serialize_Complex_ProtoBuf_FreshBuffer | Fresh buffer | 388.283 ns | 388.405 ns | 344 B |
-| Serialize_Complex_JsonContext_ReusableBuffer | Reused buffer | 947.537 ns | 909.937 ns | 5016 B |
-| Serialize_Complex_JsonContext_FreshBuffer | Fresh buffer | 985.950 ns | 938.380 ns | 6280 B |
+| **Serialize_Complex_BitPack_ReusableBuffer** | Reused caller buffer | **106.775 ns** | **106.514 ns** | **0 B** |
+| Serialize_Complex_BitPack_FreshBuffer | Fresh byte array | 135.982 ns | 135.772 ns | 296 B |
+| Serialize_Complex_BitPack_PooledBuffer | ArrayPool byte array | 114.985 ns | 114.826 ns | 40 B |
+| Serialize_Complex_MemoryPack_ReusableWriter | Reused writer | 27.278 ns | 27.204 ns | 0 B |
+| Serialize_Complex_MemoryPack_FreshWriter | Fresh writer | 45.359 ns | 43.821 ns | 312 B |
+| Serialize_Complex_MessagePack_ReusableWriter | Reused writer | 103.857 ns | 103.753 ns | 0 B |
+| Serialize_Complex_MessagePack_FreshWriter | Fresh writer | 129.704 ns | 128.765 ns | 312 B |
+| Serialize_Complex_ProtoBuf_ReusableBuffer | Reused buffer | 343.284 ns | 343.380 ns | 64 B |
+| Serialize_Complex_ProtoBuf_FreshBuffer | Fresh buffer | 362.311 ns | 361.694 ns | 344 B |
+| Serialize_Complex_JsonContext_ReusableBuffer | Reused buffer | 952.025 ns | 947.801 ns | 5016 B |
+| Serialize_Complex_JsonContext_FreshBuffer | Fresh buffer | 1,016.394 ns | 1,010.441 ns | 6280 B |
 
 #### Deserialization Speed & Allocations
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Deserialize_Complex_BitPack** | **106.391 ns** | **106.438 ns** | **104 B** |
-| Deserialize_Complex_MemoryPack | 42.162 ns | 42.147 ns | 104 B |
-| Deserialize_Complex_MessagePack | 193.323 ns | 192.926 ns | 104 B |
-| Deserialize_Complex_ProtoBuf | 397.140 ns | 396.135 ns | 192 B |
-| Deserialize_Complex_JsonContext | 1,205.571 ns | 1,206.185 ns | 792 B |
+| **Deserialize_Complex_BitPack** | **104.865 ns** | **103.978 ns** | **104 B** |
+| Deserialize_Complex_MemoryPack | 42.235 ns | 41.502 ns | 104 B |
+| Deserialize_Complex_MessagePack | 196.158 ns | 192.539 ns | 104 B |
+| Deserialize_Complex_ProtoBuf | 390.517 ns | 389.103 ns | 192 B |
+| Deserialize_Complex_JsonContext | 1,200.014 ns | 1,184.467 ns | 792 B |
 
 *Note on allocations:* The 104 bytes allocated during `Deserialize_Complex_BitPack` represent the two deserialized `string` objects themselves (`"Alex"` and `"Multiplayer Engine Pilot"`). BitPack's deserializer internals perform 0 garbage/helper allocations.
 
@@ -403,6 +403,44 @@ Generated delta APIs include:
 *   Span equivalents for span-compatible packets.
 
 `MaxDeltaBits` and `MaxDeltaBytes` report worst-case delta size, which is the full snapshot size plus one changed bit per field. Actual deltas are often much smaller. Packets with interface-typed fields do not emit delta APIs yet because changed interface fields need an explicit concrete factory or clone contract.
+
+### 6. Compact Unions / Discriminators
+A compact union pairs a property with a tiny on-wire discriminator that lets the decoder pick the concrete variant type purely from the bit stream. Unlike a plain `IBitSerializable` interface field, unions do not require the receiver to know the concrete type in advance.
+
+```csharp
+public interface IGameEvent : IBitSerializable { }
+
+[BitPacket]
+public partial class MoveEvent : IGameEvent
+{
+    [Range(0, 100)] public int Distance { get; set; }
+}
+
+[BitPacket]
+public partial class AttackEvent : IGameEvent
+{
+    [Range(0, 360)] public int Angle { get; set; }
+    public bool Heavy { get; set; }
+}
+
+[BitPacket]
+public partial class PlayerInputPacket
+{
+    [BitFieldKey(0)] public int Tick { get; set; }
+
+    [BitFieldKey(1)]
+    [BitDiscriminator]
+    [BitVariant(typeof(MoveEvent),   0)]
+    [BitVariant(typeof(AttackEvent), 2)]
+    public IGameEvent Event { get; set; } = new MoveEvent();
+}
+```
+
+The wire shape for the union slot is `[discriminatorBits bits: variant index] [variant payload per its [BitPacket] layout]`. With two variants declared, the generator defaults `discriminatorBits` to 1; with up to four variants it becomes 2. Use `[BitDiscriminator(discriminatorBits: N)]` to override.
+
+Generated delta APIs treat a union slot as a single field. One changed bit covers both the discriminator and the variant payload — if either differs from the baseline, the new discriminator and full payload are written. Span and delta APIs both work for union slots automatically.
+
+Out-of-range discriminators fall back to the configured `defaultVariant` (default `0`) so older streams remain decodable. Diagnostic `BP0006` reports empty variant lists, non-`[BitPacket]` variant types, duplicate indices, and discriminator widths that cannot address the declared variants.
 
 ---
 

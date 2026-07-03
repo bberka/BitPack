@@ -118,3 +118,39 @@ public sealed class QuaternionSmallestThreeAttribute : Attribute
 
     public int BitsPerComponent { get; }
 }
+
+/// <summary>
+///     Marks a property, field, or primary-constructor parameter as a compact union slot whose concrete type is
+///     selected by a discriminator written into the bit stream before the variant payload.
+/// </summary>
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Parameter, AllowMultiple = false, Inherited = false)]
+public sealed class BitDiscriminatorAttribute : Attribute
+{
+    public BitDiscriminatorAttribute(int discriminatorBits = 0, int defaultVariant = 0)
+    {
+        DiscriminatorBits = discriminatorBits;
+        DefaultVariant = defaultVariant;
+    }
+
+    public int DiscriminatorBits { get; }
+
+    public int DefaultVariant { get; }
+}
+
+/// <summary>
+///     Declares one concrete variant for a slot marked with <see cref="BitDiscriminatorAttribute" />. The
+///     <paramref name="index" /> argument is the discriminator value written before the variant payload.
+/// </summary>
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Parameter, AllowMultiple = true, Inherited = false)]
+public sealed class BitVariantAttribute : Attribute
+{
+    public BitVariantAttribute(Type variantType, int index)
+    {
+        VariantType = variantType;
+        Index = index;
+    }
+
+    public Type VariantType { get; }
+
+    public int Index { get; }
+}

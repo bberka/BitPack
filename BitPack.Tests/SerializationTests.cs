@@ -190,6 +190,40 @@ public partial record TestRangeOverflowPacket
     [Range(-180, 180)] public int Latitude { get; set; }
 }
 
+public interface IGameEvent : IBitSerializable { }
+
+[BitPacket]
+public partial record TestMoveEvent : IGameEvent
+{
+    [Range(0, 100)] public int Distance { get; set; }
+}
+
+[BitPacket]
+public partial record TestAttackEvent : IGameEvent
+{
+    [Range(0, 360)] public int Angle { get; set; }
+    public bool Heavy { get; set; }
+}
+
+[BitPacket]
+public partial record TestGuardEvent : IGameEvent
+{
+    [MaxLength(8)] public string Direction { get; set; } = "";
+}
+
+[BitPacket]
+public partial record TestUnionHostPacket
+{
+    [BitFieldKey(0)] public int Tick { get; set; }
+
+    [BitFieldKey(1)]
+    [BitDiscriminator]
+    [BitVariant(typeof(TestMoveEvent), 0)]
+    [BitVariant(typeof(TestAttackEvent), 2)]
+    [BitVariant(typeof(TestGuardEvent), 3)]
+    public IGameEvent Event { get; set; } = new TestMoveEvent();
+}
+
 [BitPacket]
 public partial record TestStringOverflowPacket
 {
@@ -977,6 +1011,235 @@ public class SerializationTests
         // Assert - ignored properties are NOT serialized (stay at their default values!)
         Assert.Equal(999, restored.IgnoredProperty1);
         Assert.Equal("ignore me", restored.IgnoredProperty2);
+    }
+
+    [Fact]
+    public void GeneratedPacket_UnionSlotPicksVariantFromWireAndRoundTripsAllVariants()
+    {
+        foreach (var (variant, label) in new (IGameEvent ev, string label)[]
+                 {
+                     ((IGameEvent)new TestMoveEvent { Distance = 17 }, "Move"),
+                     ((IGameEvent)new TestAttackEvent { Angle = 90, Heavy = true }, "Attack"),
+                     ((IGameEvent)new TestGuardEvent { Direction = "north" }, "Guard")
+                 })
+        {
+            var packet = new TestUnionHostPacket { Tick = 5, Event = variant };
+            var buffer = new byte[TestUnionHostPacket.MaxBytes];
+
+            packet.Serialize(new BitWriter(buffer));
+
+            var reader = new BitReader(buffer);
+            var restored = TestUnionHostPacket.Read(reader);
+            Assert.Equal(5, restored.Tick);
+
+            switch (label)
+            {
+                case "Move":
+                    var move = Assert.IsType<TestMoveEvent>(restored.Event);
+                    Assert.Equal(17, move.Distance);
+                    break;
+                case "Attack":
+                    var attack = Assert.IsType<TestAttackEvent>(restored.Event);
+                    Assert.Equal(90, attack.Angle);
+                    Assert.True(attack.Heavy);
+                    break;
+                case "Guard":
+                    var guard = Assert.IsType<TestGuardEvent>(restored.Event);
+                    Assert.Equal("north", guard.Direction);
+                    break;
+            }
+
+            var manual = new BitReader(buffer);
+            Assert.Equal(5, manual.ReadInt(7));
+            var discriminator = manual.ReadInt(2);
+            Assert.Contains(discriminator, new[] { 0, 2, 3 });
+        }
+    }
+
+    [Fact]
+    public void GeneratedPacket_UnionSlotFallsBackToDefaultVariantForNullOrUnknown()
+    {
+        var packet = new TestUnionHostPacket { Tick = 9, Event = null! };
+        var buffer = new byte[TestUnionHostPacket.MaxBytes];
+
+        packet.Serialize(new BitWriter(buffer));
+
+        var reader = new BitReader(buffer);
+        reader.ReadInt(7);
+        var discriminator = reader.ReadInt(2);
+        Assert.Equal(0, discriminator);
+
+        var restored = TestUnionHostPacket.Read(new BitReader(buffer));
+        Assert.IsType<TestMoveEvent>(restored.Event);
+    }
+
+    [Fact]
+    public void GeneratedPacket_UnionSlotUsesSpanAndTrySerializeAndReportsMaxBits()
+    {
+        var packet = new TestUnionHostPacket
+        {
+            Tick = 11,
+            Event = new TestAttackEvent { Angle = 270, Heavy = false }
+        };
+
+        Span<byte> smallBuffer = stackalloc byte[TestUnionHostPacket.MaxBytes - 1];
+        Assert.False(packet.TrySerialize(smallBuffer, out var smallBytes));
+        Assert.Equal(0, smallBytes);
+
+        Span<byte> spanBuffer = stackalloc byte[TestUnionHostPacket.MaxBytes];
+        Assert.True(packet.TrySerialize(spanBuffer, out var bytesWritten));
+        Assert.True(bytesWritten > 0);
+
+        var spanReader = new BitSpanReader(spanBuffer.Slice(0, bytesWritten));
+        var restored = TestUnionHostPacket.Read(ref spanReader);
+        var attack = Assert.IsType<TestAttackEvent>(restored.Event);
+        Assert.Equal(270, attack.Angle);
+        Assert.False(attack.Heavy);
+
+        Assert.Equal(296, TestUnionHostPacket.MaxBits);
+        Assert.Equal(37, TestUnionHostPacket.MaxBytes);
+        Assert.Contains("union=discriminatorBits=2", TestUnionHostPacket.LayoutManifest);
+        Assert.Contains("BitPack.Tests.TestAttackEvent@2", TestUnionHostPacket.LayoutManifest);
+    }
+
+    [Fact]
+    public void GeneratedPacket_UnionSlotDeltaRoundTrip()
+    {
+        var baseline = new TestUnionHostPacket
+        {
+            Tick = 1,
+            Event = new TestMoveEvent { Distance = 10 }
+        };
+        var packet = new TestUnionHostPacket
+        {
+            Tick = 1,
+            Event = new TestMoveEvent { Distance = 42 }
+        };
+
+        var buffer = new byte[TestUnionHostPacket.MaxDeltaBytes];
+        packet.SerializeDelta(baseline, new BitWriter(buffer));
+
+        var restored = TestUnionHostPacket.ReadDelta(baseline, new BitReader(buffer));
+        var move = Assert.IsType<TestMoveEvent>(restored.Event);
+        Assert.Equal(42, move.Distance);
+        Assert.Equal(1, restored.Tick);
+
+        var differentVariant = new TestUnionHostPacket
+        {
+            Tick = 1,
+            Event = new TestGuardEvent { Direction = "east" }
+        };
+        var buffer2 = new byte[TestUnionHostPacket.MaxDeltaBytes];
+        differentVariant.SerializeDelta(baseline, new BitWriter(buffer2));
+
+        var restored2 = TestUnionHostPacket.ReadDelta(baseline, new BitReader(buffer2));
+        var guard = Assert.IsType<TestGuardEvent>(restored2.Event);
+        Assert.Equal("east", guard.Direction);
+    }
+
+    [Fact]
+    public void Generator_FailsWhenDiscriminatorHasNoVariants()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+public interface IEmptyEvent : IBitSerializable { }
+
+[BitPacket]
+public partial class BadEmptyUnionHost
+{
+    [BitDiscriminator]
+    public IEmptyEvent Event { get; set; } = null!;
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0006" && e.GetMessage().Contains("no [BitVariant]"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenDiscriminatorVariantIsNotBitPacket()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+public interface IBadEvent : IBitSerializable { }
+
+public class NotAPacket { }
+
+[BitPacket]
+public partial class BadVariantTypeHost
+{
+    [BitDiscriminator]
+    [BitVariant(typeof(NotAPacket), 0)]
+    public IBadEvent Event { get; set; } = null!;
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0006" && e.GetMessage().Contains("must be marked with [BitPacket]"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenDiscriminatorHasDuplicateIndices()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+public interface IDupEvent : IBitSerializable { }
+
+[BitPacket]
+public partial class DupVariantA : IDupEvent { public int A { get; set; } }
+
+[BitPacket]
+public partial class DupVariantB : IDupEvent { public int B { get; set; } }
+
+[BitPacket]
+public partial class BadDuplicateIndexHost
+{
+    [BitDiscriminator]
+    [BitVariant(typeof(DupVariantA), 0)]
+    [BitVariant(typeof(DupVariantB), 0)]
+    public IDupEvent Event { get; set; } = null!;
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0006" && e.GetMessage().Contains("duplicate discriminator index"));
+    }
+
+    [Fact]
+    public void Generator_FailsWhenDiscriminatorBitsCannotAddressVariants()
+    {
+        var errors = GetGeneratorErrors(@"
+using BitPack;
+
+public interface IRangeEvent : IBitSerializable { }
+
+[BitPacket]
+public partial class RangeVariantA : IRangeEvent { public int A { get; set; } }
+
+[BitPacket]
+public partial class RangeVariantB : IRangeEvent { public int B { get; set; } }
+
+[BitPacket]
+public partial class RangeVariantC : IRangeEvent { public int C { get; set; } }
+
+[BitPacket]
+public partial class RangeVariantD : IRangeEvent { public int D { get; set; } }
+
+[BitPacket]
+public partial class RangeVariantE : IRangeEvent { public int E { get; set; } }
+
+[BitPacket]
+public partial class TooFewDiscriminatorBitsHost
+{
+    [BitDiscriminator(discriminatorBits: 1)]
+    [BitVariant(typeof(RangeVariantA), 0)]
+    [BitVariant(typeof(RangeVariantB), 1)]
+    [BitVariant(typeof(RangeVariantC), 2)]
+    public IRangeEvent Event { get; set; } = null!;
+}
+");
+
+        Assert.Contains(errors, e => e.Id == "BP0006" && e.GetMessage().Contains("requires more"));
     }
 
     [Fact]
