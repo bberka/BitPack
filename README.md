@@ -8,10 +8,16 @@ BitPack is a high-performance, native AOT-compatible, zero-allocation C# bit-lev
 
 By generating serialization logic at compile time using Roslyn Incremental Source Generators, BitPack reads and writes variables directly to a bitstream, allowing properties to occupy fractional byte lengths on the wire (e.g., storing a rotation angle in exactly 9 bits instead of a 32-bit integer).
 
+## Project Status
+
+> [!WARNING]
+> **BitPack is primarily a research and experimentation project and is not production-ready.** It is intended as a starting point for exploring serialization and network-payload optimization in multiplayer games and other network-heavy applications. Use it to investigate techniques and benchmark ideas against your own workloads; thoroughly validate correctness, wire compatibility, security, and performance before using any part of it in production.
+
 ---
 
 ## Table of Contents
 
+- [Project Status](#project-status)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Supported Types](#supported-types)
