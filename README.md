@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon.svg" alt="BitPack icon" width="128" height="128"></p>
+
 # BitPack: Bit-Level Serialization Class Library
 
 [![NuGet Version](https://img.shields.io/nuget/v/BitPack.svg?style=flat-square)](https://www.nuget.org/packages/BitPack/)
