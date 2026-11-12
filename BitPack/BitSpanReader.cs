@@ -160,6 +160,13 @@ public ref struct BitSpanReader
     [MethodImpl(MethodImplOptions.NoInlining)]
     private string ReadStringLarge(int length)
     {
+        if (length <= 256)
+        {
+            Span<byte> stack = stackalloc byte[length];
+            ReadBytes(stack);
+            return Encoding.UTF8.GetString(stack);
+        }
+
         var pooled = ArrayPool<byte>.Shared.Rent(length);
         try
         {
@@ -173,7 +180,7 @@ public ref struct BitSpanReader
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void ReadBytes(Span<byte> destination)
+    public void ReadBytes(scoped Span<byte> destination)
     {
         if (destination.IsEmpty) return;
 

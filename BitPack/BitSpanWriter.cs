@@ -196,6 +196,15 @@ public ref struct BitSpanWriter
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void WriteStringLarge(string text, int maxBytes, int length, int lengthBits)
     {
+        if (maxBytes <= 256)
+        {
+            Span<byte> stack = stackalloc byte[maxBytes];
+            var written = Encoding.UTF8.GetBytes(text.AsSpan(0, length), stack);
+            WriteInt(written, lengthBits);
+            WriteBytes(stack.Slice(0, written));
+            return;
+        }
+
         var pooled = ArrayPool<byte>.Shared.Rent(maxBytes);
         try
         {
@@ -210,7 +219,7 @@ public ref struct BitSpanWriter
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void WriteBytes(ReadOnlySpan<byte> source)
+    public void WriteBytes(scoped ReadOnlySpan<byte> source)
     {
         if (source.IsEmpty) return;
 
