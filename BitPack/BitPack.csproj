@@ -13,8 +13,8 @@
         <VersionPrefix>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\VERSION').Trim())</VersionPrefix>
         <Authors>Alex, Antigravity</Authors>
         <Description>A high-performance compile-time bit-level packet packing and serialization library for .NET.</Description>
-        <PackageProjectUrl>https://github.com/alex/BitPack</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/alex/BitPack</RepositoryUrl>
+        <PackageProjectUrl>https://github.com/bberka/BitPack</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/bberka/BitPack</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
         <PackageTags>networking game-development bit-packing serialization binary source-generator</PackageTags>
 
