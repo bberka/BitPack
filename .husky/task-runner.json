@@ -1,0 +1,15 @@
+{
+   "$schema": "https://alirezanet.github.io/Husky.Net/schema.json",
+   "tasks": [
+      {
+         "name": "build",
+         "command": "dotnet",
+         "args": [ "build", "BitPack.slnx", "-c", "Release", "--nologo", "-v", "q" ]
+      },
+      {
+         "name": "test",
+         "command": "dotnet",
+         "args": [ "test", "BitPack.slnx", "-c", "Release", "--no-build", "--nologo" ]
+      }
+   ]
+}
