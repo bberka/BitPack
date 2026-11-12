@@ -536,8 +536,8 @@ A V2 client sending in the new order to a V1 server will interleave `AimAngle` b
 | Action | Result |
 | :--- | :--- |
 | Add at end + `[SinceVersion]` | New clients write the field; old clients skip it on read. Safe. |
-| Add at end without `[SinceVersion]` | Old clients won't know the field exists — deserialization reads incorrect bits from the new field's slot. Unsafe. |
-| Add in the middle | Same as reordering — breaks alignment for all subsequent fields. Unsafe. |
+| Add at end without `[SinceVersion]` | Old clients won't know the field exists, so deserialization reads incorrect bits from the new field's slot. Unsafe. |
+| Add in the middle | Same as reordering: it breaks alignment for all subsequent fields. Unsafe. |
 | Add with a new `[BitFieldKey]` but no `[SinceVersion]` | Source order is stable, but old clients still do not know the field exists. Unsafe. |
 
 #### Removing Properties
@@ -567,7 +567,7 @@ public partial record PlayerInput
 
 **Instead of removing a field, gate it behind `[SinceVersion]` on a bumped packet version and leave its declaration in place.** This ensures old clients produce a stream that the new server can still parse correctly.
 
-#### Renaming Properties — SAFE
+#### Renaming Properties: Safe
 
 Renaming a property has no effect on the wire format. BitPack serializes by **declaration order**, not by member name.
 
@@ -663,7 +663,7 @@ public enum GameState { Idle = 0, Running = 1, Paused = 2 }
 
 BitPack trusts the annotations at face value. Assigning values that exceed declared constraints throws an `ArgumentOutOfRangeException` at `Serialize()` time for **all** constrained types: strings, integers, floats, and enums.
 
-**Strings — exceeds `[MaxLength]` or `[StringLength]`:**
+**Strings over `[MaxLength]` or `[StringLength]`:**
 
 ```csharp
 [BitPacket]
@@ -677,7 +677,7 @@ public partial record PlayerPacket
 new PlayerPacket { Name = "This string is way longer than sixteen characters" };
 ```
 
-**Arrays — exceeds `[MaxLength]` or violates `[FixedCount]`:**
+**Arrays over `[MaxLength]` or breaking `[FixedCount]`:**
 
 ```csharp
 [BitPacket]
@@ -698,7 +698,7 @@ new InputPacket { EntityIds = new int[9], Buttons = new bool[4] }.Serialize(writ
 new InputPacket { EntityIds = Array.Empty<int>(), Buttons = new bool[2] }.Serialize(writer);
 ```
 
-**Integers — outside `[Range]`:**
+**Integers outside `[Range]`:**
 
 ```csharp
 [BitPacket]
@@ -713,7 +713,7 @@ var packet = new PlayerPacket { Health = 999 };
 packet.Serialize(writer);
 ```
 
-**Enums — auto-detected or `[Range]`-declared:**
+**Enums, auto-detected or `[Range]`-declared:**
 
 ```csharp
 [BitPacket]
@@ -982,6 +982,15 @@ Contributions are welcome. Please open an issue first to discuss what you'd like
 
 - [.NET SDK 10.0](https://dotnet.microsoft.com/download) (or later)
 
+### Git Hooks
+
+Install the [Husky.Net](https://alirezanet.github.io/Husky.Net/) hooks once per clone. The pre-commit hook builds the solution in Release and runs the tests.
+
+```bash
+dotnet tool restore
+dotnet husky install
+```
+
 ### Build
 
 ```bash
@@ -998,6 +1007,10 @@ dotnet test BitPack.Tests/BitPack.Tests.csproj
 
 See [Running Benchmarks](#running-benchmarks).
 
+### Working With AI Agents
+
+[AGENTS.md](AGENTS.md) describes the workflow expected from coding agents: one worktree per task, grouped commits, a pull request as soon as the work is done, and waiting for CI.
+
 ### Project Structure
 
 For how the pieces fit together and how to reuse them in your own engine, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -1013,4 +1026,4 @@ For how the pieces fit together and how to reuse them in your own engine, see [d
 
 - All public API methods are annotated `[MethodImpl(MethodImplOptions.AggressiveInlining)]`.
 - Internal hot-path methods use `Unsafe` intrinsics for unaligned memory access.
-- The library targets `netstandard2.1` for broad compatibility while the generator targets `netstandard2.0`.
+- The library targets `netstandard2.1` and `net10.0` for broad compatibility, while the generator targets `netstandard2.0`.
