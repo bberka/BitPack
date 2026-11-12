@@ -998,10 +998,12 @@ See [Running Benchmarks](#running-benchmarks).
 
 ### Project Structure
 
+For how the pieces fit together and how to reuse them in your own engine, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 | Directory | Description |
 | :--- | :--- |
 | `BitPack/` | Core library — `BitWriter`, `BitReader`, attributes, and the `IBitSerializable` interface |
-| `BitPack.Generator/` | Roslyn incremental source generator — emits `Serialize`, `Deserialize`, `Read`, and the span/delta/union API surface at compile time |
+| `BitPack.Generator/` | Roslyn incremental source generator (split into `PacketGenerator.*.cs` partials) — emits `Serialize`, `Deserialize`, `Read`, and the span/delta/union API surface at compile time |
 | `BitPack.Tests/` | xUnit test suite covering all serialization scenarios |
 | `BitPack.Benchmarks/` | BenchmarkDotNet harness comparing BitPack against other serializers |
 
