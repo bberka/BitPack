@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 
 namespace BitPack.Generator;
@@ -12,7 +11,7 @@ namespace BitPack.Generator;
 public partial class PacketGenerator
 {
     private static void GenerateSerializationLoop(SourceProductionContext context, StringBuilder sb,
-        ITypeSymbol typeSymbol, List<SerializationTarget> targets, bool isWriting, int packetMaxVersion,
+        List<SerializationTarget> targets, bool isWriting, int packetMaxVersion,
         bool skipValidation, bool useSpan = false)
     {
         foreach (var target in targets)
@@ -65,7 +64,7 @@ public partial class PacketGenerator
     }
 
     private static void GenerateDeltaSerializationLoop(SourceProductionContext context, StringBuilder sb,
-        ITypeSymbol typeSymbol, List<SerializationTarget> targets, int packetMaxVersion, bool skipValidation,
+        List<SerializationTarget> targets, int packetMaxVersion, bool skipValidation,
         bool useSpan = false)
     {
         foreach (var target in targets)
@@ -213,7 +212,7 @@ public partial class PacketGenerator
 
         if (TryGetQuaternionSmallestThreeConfig(propType, target.Symbol, out var quaternionConfig, out _))
         {
-            GenerateQuaternionSmallestThreeSerialization(sb, target, quaternionConfig, isWriting, targetVarName, skipValidation);
+            GenerateQuaternionSmallestThreeSerialization(sb, target, quaternionConfig, isWriting, targetVarName);
             return;
         }
 
@@ -579,9 +578,9 @@ public partial class PacketGenerator
 
         if (isWriting)
         {
-            GenerateVectorComponentWrite(sb, targetVarName, "X", suffix, config, skipValidation);
-            GenerateVectorComponentWrite(sb, targetVarName, "Y", suffix, config, skipValidation);
-            if (isVector3) GenerateVectorComponentWrite(sb, targetVarName, "Z", suffix, config, skipValidation);
+            GenerateVectorComponentWrite(sb, targetVarName, "X", config, skipValidation);
+            GenerateVectorComponentWrite(sb, targetVarName, "Y", config, skipValidation);
+            if (isVector3) GenerateVectorComponentWrite(sb, targetVarName, "Z", config, skipValidation);
         }
         else
         {
@@ -595,7 +594,7 @@ public partial class PacketGenerator
     }
 
     private static void GenerateVectorComponentWrite(StringBuilder sb, string targetVarName, string component,
-        string suffix, VectorRangeConfig config, bool skipValidation)
+        VectorRangeConfig config, bool skipValidation)
     {
         var componentAccess = $"{targetVarName}.{component}";
         if (!skipValidation)
@@ -613,7 +612,7 @@ public partial class PacketGenerator
     }
 
     private static void GenerateQuaternionSmallestThreeSerialization(StringBuilder sb, SerializationTarget target,
-        QuaternionSmallestThreeConfig config, bool isWriting, string targetVarName, bool skipValidation)
+        QuaternionSmallestThreeConfig config, bool isWriting, string targetVarName)
     {
         var suffix = SanitizeIdentifier(target.Name);
         var maxEncoded = (1L << config.BitsPerComponent) - 1;

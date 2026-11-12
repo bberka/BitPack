@@ -400,7 +400,7 @@ The wire shape for the union slot is:
 
 With two variants declared, the generator defaults `discriminatorBits` to 1; with up to four variants it becomes 2. Use `[BitDiscriminator(discriminatorBits: N)]` to override.
 
-Generated delta APIs treat a union slot as a single field. One changed bit covers both the discriminator and the variant payload — if either differs from the baseline, the new discriminator and full payload are written. Span and delta APIs both work for union slots automatically.
+Generated delta APIs treat a union slot as a single field. One changed bit covers both the discriminator and the variant payload: if either differs from the baseline, the new discriminator and full payload are written. Span and delta APIs both work for union slots automatically.
 
 Out-of-range discriminators fall back to the configured `defaultVariant` (default `0`) so older streams remain decodable. Diagnostic `BP0006` reports empty variant lists, non-`[BitPacket]` variant types, duplicate indices, and discriminator widths that cannot address the declared variants.
 
@@ -408,7 +408,7 @@ Out-of-range discriminators fall back to the configured `defaultVariant` (defaul
 
 ## Serialization Wire Format
 
-BitPack writes the entire bitstream as a dense, unbroken sequence of bits — there are **no delimiters, field names, separators, or type metadata** between properties. The wire is self-describing only to code that was compiled with the exact same `[BitPacket]` layout.
+BitPack writes the entire bitstream as a dense, unbroken sequence of bits. There are **no delimiters, field names, separators, or type metadata** between properties. The wire is self-describing only to code that was compiled with the exact same `[BitPacket]` layout.
 
 ### Property Order
 
@@ -436,7 +436,7 @@ If the packet has `[BitPacket(Version = N)]` with `N > 1`, a 4-bit version heade
 
 **Union payloads** interleave a small discriminator before each variant payload, sharing the host packet's bit stream.
 
-The deserializer reads properties in the same sequential order, consuming exactly the same number of bits per property. Any mismatch in order, type, or bit-width between writer and reader produces **silent data corruption** — not an error message.
+The deserializer reads properties in the same sequential order, consuming exactly the same number of bits per property. Any mismatch in order, type, or bit-width between writer and reader produces **silent data corruption**, not an error message.
 
 To make refactors safer, use `[BitFieldKey]` on every serializable member in a packet. The generator then writes fields in ascending key order instead of source declaration order:
 
@@ -661,7 +661,7 @@ public enum GameState { Idle = 0, Running = 1, Paused = 2 }
 
 ### Runtime Mismatch and Overflow Behaviour
 
-BitPack trusts the annotations at face value. Assigning values that exceed declared constraints throws an `ArgumentOutOfRangeException` at `Serialize()` time for **all** constrained types — strings, integers, floats, and enums.
+BitPack trusts the annotations at face value. Assigning values that exceed declared constraints throws an `ArgumentOutOfRangeException` at `Serialize()` time for **all** constrained types: strings, integers, floats, and enums.
 
 **Strings — exceeds `[MaxLength]` or `[StringLength]`:**
 
@@ -733,7 +733,7 @@ new GamePacket { State = (GameState)99 };
 
 **Floats/doubles with `[Precision]`** throw identically for values outside the `[Range]`.
 
-**Game math codecs** — `[Angle]` throws outside `[0, 360)`, `[VectorRange]` throws when any component is outside the declared range, and `[QuaternionSmallestThree]` throws for zero-length quaternions:
+**Game math codecs**: `[Angle]` throws outside `[0, 360)`, `[VectorRange]` throws when any component is outside the declared range, and `[QuaternionSmallestThree]` throws for zero-length quaternions:
 
 ```csharp
 [BitPacket]
@@ -1004,8 +1004,8 @@ For how the pieces fit together and how to reuse them in your own engine, see [d
 
 | Directory | Description |
 | :--- | :--- |
-| `BitPack/` | Core library — `BitWriter`, `BitReader`, attributes, and the `IBitSerializable` interface |
-| `BitPack.Generator/` | Roslyn incremental source generator (split into `PacketGenerator.*.cs` partials) — emits `Serialize`, `Deserialize`, `Read`, and the span/delta/union API surface at compile time |
+| `BitPack/` | Core library: `BitWriter`, `BitReader`, attributes, and the `IBitSerializable` interface |
+| `BitPack.Generator/` | Roslyn incremental source generator (split into `PacketGenerator.*.cs` partials). Emits `Serialize`, `Deserialize`, `Read`, and the span/delta/union API surface at compile time |
 | `BitPack.Tests/` | xUnit test suite covering all serialization scenarios |
 | `BitPack.Benchmarks/` | BenchmarkDotNet harness comparing BitPack against other serializers |
 
