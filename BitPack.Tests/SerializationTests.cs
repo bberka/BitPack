@@ -249,7 +249,6 @@ public class SerializationTests
     [Fact]
     public void GeneratedPacket_SerializesAndDeserializesCorrectlyWithNestedTypesAndCustomStructs()
     {
-        // Arrange
         var buffer = new byte[128];
 
         var originalPacket = new TestPlayerInput
@@ -264,18 +263,15 @@ public class SerializationTests
             }
         };
 
-        // Act - Serialize
         var writer = new BitWriter(buffer);
         originalPacket.Serialize(writer);
 
         var bytesUsed = writer.BytesWritten;
 
-        // Act - Deserialize back
         var reader = new BitReader(buffer);
         var restoredPacket = new TestPlayerInput();
         restoredPacket.Deserialize(reader);
 
-        // Assert values match perfectly
         Assert.Equal(originalPacket.AimAngle, restoredPacket.AimAngle);
         Assert.Equal(originalPacket.IsMoving, restoredPacket.IsMoving);
         Assert.Equal(originalPacket.HealthPercent, restoredPacket.HealthPercent);
@@ -286,7 +282,6 @@ public class SerializationTests
     [Fact]
     public void GeneratedPacket_SerializesAndDeserializesExtendedTypesLosslessly()
     {
-        // Arrange
         var buffer = new byte[128];
 
         var originalPacket = new TestPlayerExtendedInput
@@ -297,11 +292,9 @@ public class SerializationTests
             Weapon = new WeaponItem { ItemId = 42, Durability = 85 }
         };
 
-        // Act - Serialize
         var writer = new BitWriter(buffer);
         originalPacket.Serialize(writer);
 
-        // Act - Deserialize back into pre-allocated model
         var reader = new BitReader(buffer);
         var restoredPacket = new TestPlayerExtendedInput
         {
@@ -309,7 +302,6 @@ public class SerializationTests
         };
         restoredPacket.Deserialize(reader);
 
-        // Assert
         Assert.Equal(originalPacket.AccountBalance, restoredPacket.AccountBalance);
         Assert.Equal(originalPacket.NativeSessionId, restoredPacket.NativeSessionId);
         Assert.Equal(originalPacket.NativeThreadMask, restoredPacket.NativeThreadMask);
@@ -323,14 +315,12 @@ public class SerializationTests
     [Fact]
     public void GeneratedPacket_DeserializesUndefinedEnum_FallsBackToZero()
     {
-        // Arrange
         var buffer = new byte[128];
         var writer = new BitWriter(buffer);
 
         // Write undefined state index 3 (only 0, 1, 2 are defined)
         writer.WriteInt(3, 2);
 
-        // Act
         var reader = new BitReader(buffer);
         var restored = new TestEnumPacket();
         restored.Deserialize(reader);
@@ -342,7 +332,6 @@ public class SerializationTests
     [Fact]
     public void GeneratedPacket_SerializesAndDeserializesVersionGatedFields()
     {
-        // Arrange
         var buffer = new byte[128];
         var original = new TestVersionedInput
         {
@@ -350,16 +339,13 @@ public class SerializationTests
             ExtraBoost = true
         };
 
-        // Act - Serialize (writes version header 2)
         var writer = new BitWriter(buffer);
         original.Serialize(writer);
 
-        // Act - Deserialize back as V2 client
         var reader = new BitReader(buffer);
         var restored = new TestVersionedInput();
         restored.Deserialize(reader);
 
-        // Assert both properties are preserved
         Assert.Equal(75, restored.BaseSpeed);
         Assert.True(restored.ExtraBoost);
     }
@@ -961,7 +947,6 @@ public class SerializationTests
     [Fact]
     public void GeneratedPacket_DeserializesOlderVersionStream_FallsBackGracefully()
     {
-        // Arrange
         var buffer = new byte[128];
         var writer = new BitWriter(buffer);
 
@@ -983,7 +968,6 @@ public class SerializationTests
     [Fact]
     public void GeneratedPacket_RespectsIgnoreAndPromotesPrivateMembers()
     {
-        // Arrange
         var buffer = new byte[128];
         var original = new TestIgnoredAndPrivatePacket
         {
@@ -994,11 +978,9 @@ public class SerializationTests
         };
         original.SetPrivateField(99);
 
-        // Act - Serialize
         var writer = new BitWriter(buffer);
         original.Serialize(writer);
 
-        // Act - Deserialize
         var reader = new BitReader(buffer);
         var restored = new TestIgnoredAndPrivatePacket();
         restored.Deserialize(reader);
@@ -1245,30 +1227,25 @@ public partial class TooFewDiscriminatorBitsHost
     [Fact]
     public void GeneratedPacket_SerializesUnicodeAndEmojiStringsCorrectly()
     {
-        // Arrange
         var buffer = new byte[256];
         var original = new TestUnicodePacket
         {
             Message = "你好👋🌟"
         };
 
-        // Act - Serialize
         var writer = new BitWriter(buffer);
         original.Serialize(writer);
 
-        // Act - Deserialize
         var reader = new BitReader(buffer);
         var restored = new TestUnicodePacket();
         restored.Deserialize(reader);
 
-        // Assert
         Assert.Equal("你好👋🌟", restored.Message);
     }
 
     [Fact]
     public void GeneratedPacket_SupportsRequiredAndInitOnlyProperties()
     {
-        // Arrange
         var buffer = new byte[128];
         var original = new TestInitAndRequiredPacket
         {
@@ -1277,15 +1254,12 @@ public partial class TooFewDiscriminatorBitsHost
             RequiredName = "required test"
         };
 
-        // Act - Serialize
         var writer = new BitWriter(buffer);
         original.Serialize(writer);
 
-        // Act - Deserialize (Static Read factory handles init/required)
         var reader = new BitReader(buffer);
         var restored = TestInitAndRequiredPacket.Read(reader);
 
-        // Assert
         Assert.Equal(123, restored.RegularVal);
         Assert.Equal(456, restored.InitOnlyVal);
         Assert.Equal("required test", restored.RequiredName);
@@ -1294,11 +1268,9 @@ public partial class TooFewDiscriminatorBitsHost
     [Fact]
     public void GeneratedPacket_SupportsPrimaryConstructors()
     {
-        // Arrange
         var buffer = new byte[128];
         var original = new TestPrimaryCtorPacket(25, "Alex");
 
-        // Act - Serialize
         var writer = new BitWriter(buffer);
         original.Serialize(writer);
 
@@ -1306,7 +1278,6 @@ public partial class TooFewDiscriminatorBitsHost
         var reader = new BitReader(buffer);
         var restored = TestPrimaryCtorPacket.Read(reader);
 
-        // Assert
         Assert.Equal(25, restored.Age);
         Assert.Equal("Alex", restored.Nickname);
     }
@@ -1314,7 +1285,6 @@ public partial class TooFewDiscriminatorBitsHost
     [Fact]
     public void Generator_FailsWhenPropertyLacksGetterOrSetter()
     {
-        // Arrange
         var sourceCode = @"
 using BitPack;
 
@@ -1357,10 +1327,8 @@ public partial class BadPacketNoSetter
         var generator = new PacketGenerator();
         var driver = CSharpGeneratorDriver.Create(generator);
 
-        // Act
         driver.RunGeneratorsAndUpdateCompilation(compilation, out var outputCompilation, out var diagnostics);
 
-        // Assert
         var errors = diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
 
         Assert.Contains(errors, e => e.GetMessage().Contains("must have a getter accessor"));
