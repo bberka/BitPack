@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
@@ -158,14 +157,14 @@ public partial class PacketGenerator : IIncrementalGenerator
         sourceBuilder.AppendLine("    {");
         if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
 
-        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, true, packetMaxVersion, false);
+        GenerateSerializationLoop(context, sourceBuilder, targets, true, packetMaxVersion, false);
         sourceBuilder.AppendLine("    }");
         sourceBuilder.AppendLine();
 
         sourceBuilder.AppendLine("    public void SerializeUnchecked(BitWriter writer)");
         sourceBuilder.AppendLine("    {");
         if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
-        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, true, packetMaxVersion, true);
+        GenerateSerializationLoop(context, sourceBuilder, targets, true, packetMaxVersion, true);
         sourceBuilder.AppendLine("    }");
         sourceBuilder.AppendLine();
 
@@ -176,7 +175,7 @@ public partial class PacketGenerator : IIncrementalGenerator
             if (!typeSymbol.IsValueType)
                 sourceBuilder.AppendLine("        if (baseline == null) throw new ArgumentNullException(nameof(baseline));");
             if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
-            GenerateDeltaSerializationLoop(context, sourceBuilder, typeSymbol, targets, packetMaxVersion, false);
+            GenerateDeltaSerializationLoop(context, sourceBuilder, targets, packetMaxVersion, false);
             sourceBuilder.AppendLine("    }");
             sourceBuilder.AppendLine();
 
@@ -185,7 +184,7 @@ public partial class PacketGenerator : IIncrementalGenerator
             if (!typeSymbol.IsValueType)
                 sourceBuilder.AppendLine("        if (baseline == null) throw new ArgumentNullException(nameof(baseline));");
             if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
-            GenerateDeltaSerializationLoop(context, sourceBuilder, typeSymbol, targets, packetMaxVersion, true);
+            GenerateDeltaSerializationLoop(context, sourceBuilder, targets, packetMaxVersion, true);
             sourceBuilder.AppendLine("    }");
             sourceBuilder.AppendLine();
         }
@@ -195,14 +194,14 @@ public partial class PacketGenerator : IIncrementalGenerator
             sourceBuilder.AppendLine("    public void Serialize(ref BitSpanWriter writer)");
             sourceBuilder.AppendLine("    {");
             if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
-            GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, true, packetMaxVersion, false, true);
+            GenerateSerializationLoop(context, sourceBuilder, targets, true, packetMaxVersion, false, true);
             sourceBuilder.AppendLine("    }");
             sourceBuilder.AppendLine();
 
             sourceBuilder.AppendLine("    public void SerializeUnchecked(ref BitSpanWriter writer)");
             sourceBuilder.AppendLine("    {");
             if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
-            GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, true, packetMaxVersion, true, true);
+            GenerateSerializationLoop(context, sourceBuilder, targets, true, packetMaxVersion, true, true);
             sourceBuilder.AppendLine("    }");
             sourceBuilder.AppendLine();
 
@@ -213,7 +212,7 @@ public partial class PacketGenerator : IIncrementalGenerator
                 if (!typeSymbol.IsValueType)
                     sourceBuilder.AppendLine("        if (baseline == null) throw new ArgumentNullException(nameof(baseline));");
                 if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
-                GenerateDeltaSerializationLoop(context, sourceBuilder, typeSymbol, targets, packetMaxVersion, false, true);
+                GenerateDeltaSerializationLoop(context, sourceBuilder, targets, packetMaxVersion, false, true);
                 sourceBuilder.AppendLine("    }");
                 sourceBuilder.AppendLine();
 
@@ -222,7 +221,7 @@ public partial class PacketGenerator : IIncrementalGenerator
                 if (!typeSymbol.IsValueType)
                     sourceBuilder.AppendLine("        if (baseline == null) throw new ArgumentNullException(nameof(baseline));");
                 if (packetMaxVersion > 1) sourceBuilder.AppendLine($"        writer.WriteInt({packetMaxVersion}, 4);");
-                GenerateDeltaSerializationLoop(context, sourceBuilder, typeSymbol, targets, packetMaxVersion, true, true);
+                GenerateDeltaSerializationLoop(context, sourceBuilder, targets, packetMaxVersion, true, true);
                 sourceBuilder.AppendLine("    }");
                 sourceBuilder.AppendLine();
             }
@@ -342,7 +341,7 @@ public partial class PacketGenerator : IIncrementalGenerator
                 : "        reader.ReadInt(4);");
         else if (hasVersionedTargets) sourceBuilder.AppendLine("        var packetVersion = 1;");
 
-        GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, false, packetMaxVersion, false);
+        GenerateSerializationLoop(context, sourceBuilder, targets, false, packetMaxVersion, false);
         sourceBuilder.AppendLine("    }");
 
         if (supportsSpanApis)
@@ -355,7 +354,7 @@ public partial class PacketGenerator : IIncrementalGenerator
                     ? "        var packetVersion = reader.ReadInt(4);"
                     : "        reader.ReadInt(4);");
             else if (hasVersionedTargets) sourceBuilder.AppendLine("        var packetVersion = 1;");
-            GenerateSerializationLoop(context, sourceBuilder, typeSymbol, targets, false, packetMaxVersion, false, true);
+            GenerateSerializationLoop(context, sourceBuilder, targets, false, packetMaxVersion, false, true);
             sourceBuilder.AppendLine("    }");
         }
 
