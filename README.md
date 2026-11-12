@@ -867,7 +867,7 @@ BitPack enforces strict compile-time checks to prevent unoptimized layouts or in
 
 ## Benchmark Results
 
-The following benchmarks compare serialization and deserialization of two packet structures under **High Process Priority** using **.NET 10.0.9**:
+The following benchmarks compare serialization and deserialization of two packet structures under **High Process Priority** using **.NET 10.0.14**:
 
 1. **Simple Packet (Primitive-only)**: Contains 12 properties (integer, float, double, byte, sbyte, short, ushort, ticks, and boolean states) with no string fields.
 2. **Complex Packet**: Contains 12 properties including strings, DateTimes, enums, and nested structs.
@@ -881,6 +881,8 @@ dotnet run -c Release -f net10.0 --project BitPack.Benchmarks/BitPack.Benchmarks
 ```
 
 BenchmarkDotNet will prompt for which benchmarks to run. Use `*` to run all benchmarks, or enter a filter such as `*Simple*`, `*Complex*`, `*Serialize*`, or `*Deserialize*` to run a subset.
+
+Pass BenchmarkDotNet arguments after `--` to filter, for example `-- --filter '*_BitPack_*'`.
 
 Results are written to `BenchmarkDotNet.Artifacts/results/` as Markdown, CSV, and HTML reports. For the most stable numbers, close other heavy applications and avoid using the machine while the benchmarks run.
 
@@ -898,31 +900,31 @@ Results are written to `BenchmarkDotNet.Artifacts/results/` as Markdown, CSV, an
 
 #### Serialization Scenarios & Allocations
 
-*BenchmarkDotNet v0.15.8, .NET 10.0.9 (X64 RyuJIT x86-64-v3). Deserialization benchmarks consume the full deserialized object with BenchmarkDotNet's `Consumer`.*
+*BenchmarkDotNet v0.15.8, .NET 10.0.14 (X64 RyuJIT x86-64-v3). Deserialization benchmarks consume the full deserialized object with BenchmarkDotNet's `Consumer`.*
 
 | Method | Scenario | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :--- | :---: | :---: | :---: |
-| **Serialize_Simple_BitPack_ReusableBuffer** | Reused caller buffer | **27.639 ns** | **26.864 ns** | **0 B** |
-| Serialize_Simple_BitPack_FreshBuffer | Fresh byte array | 31.995 ns | 31.773 ns | 88 B |
-| Serialize_Simple_BitPack_PooledBuffer | ArrayPool byte array | 36.041 ns | 35.799 ns | 40 B |
-| Serialize_Simple_MemoryPack_ReusableWriter | Reused writer | 3.182 ns | 3.167 ns | 0 B |
-| Serialize_Simple_MemoryPack_FreshWriter | Fresh writer | 15.431 ns | 15.445 ns | 312 B |
-| Serialize_Simple_MessagePack_ReusableWriter | Reused writer | 36.159 ns | 35.943 ns | 0 B |
-| Serialize_Simple_MessagePack_FreshWriter | Fresh writer | 50.333 ns | 49.903 ns | 312 B |
-| Serialize_Simple_ProtoBuf_ReusableBuffer | Reused buffer | 151.106 ns | 151.534 ns | 64 B |
-| Serialize_Simple_ProtoBuf_FreshBuffer | Fresh buffer | 162.467 ns | 161.377 ns | 344 B |
-| Serialize_Simple_JsonContext_ReusableBuffer | Reused buffer | 250.478 ns | 246.602 ns | 512 B |
-| Serialize_Simple_JsonContext_FreshBuffer | Fresh buffer | 260.442 ns | 256.496 ns | 792 B |
+| **Serialize_Simple_BitPack_ReusableBuffer** | Reused caller buffer | **23.499 ns** | **23.553 ns** | **0 B** |
+| Serialize_Simple_BitPack_FreshBuffer | Fresh byte array | 30.283 ns | 30.220 ns | 104 B |
+| Serialize_Simple_BitPack_PooledBuffer | ArrayPool byte array | 31.953 ns | 31.794 ns | 56 B |
+| Serialize_Simple_MemoryPack_ReusableWriter | Reused writer | 2.614 ns | 2.582 ns | 0 B |
+| Serialize_Simple_MemoryPack_FreshWriter | Fresh writer | 17.913 ns | 17.271 ns | 312 B |
+| Serialize_Simple_MessagePack_ReusableWriter | Reused writer | 31.574 ns | 31.285 ns | 0 B |
+| Serialize_Simple_MessagePack_FreshWriter | Fresh writer | 50.270 ns | 50.425 ns | 312 B |
+| Serialize_Simple_ProtoBuf_ReusableBuffer | Reused buffer | 141.080 ns | 141.022 ns | 64 B |
+| Serialize_Simple_ProtoBuf_FreshBuffer | Fresh buffer | 175.398 ns | 175.120 ns | 344 B |
+| Serialize_Simple_JsonContext_ReusableBuffer | Reused buffer | 257.541 ns | 256.982 ns | 512 B |
+| Serialize_Simple_JsonContext_FreshBuffer | Fresh buffer | 255.318 ns | 255.822 ns | 792 B |
 
 #### Deserialization Speed & Allocations
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Deserialize_Simple_BitPack** | **21.481 ns** | **21.431 ns** | **0 B** |
-| Deserialize_Simple_MemoryPack | 1.089 ns | 1.088 ns | 0 B |
-| Deserialize_Simple_MessagePack | 53.104 ns | 52.062 ns | 0 B |
-| Deserialize_Simple_ProtoBuf | 149.046 ns | 149.089 ns | 88 B |
-| Deserialize_Simple_JsonContext | 402.547 ns | 401.944 ns | 64 B |
+| **Deserialize_Simple_BitPack** | **16.235 ns** | **16.255 ns** | **0 B** |
+| Deserialize_Simple_MemoryPack | 1.078 ns | 1.082 ns | 0 B |
+| Deserialize_Simple_MessagePack | 53.113 ns | 52.979 ns | 0 B |
+| Deserialize_Simple_ProtoBuf | 158.666 ns | 158.667 ns | 88 B |
+| Deserialize_Simple_JsonContext | 402.807 ns | 401.542 ns | 64 B |
 
 ### Complex Packet Benchmarks
 
@@ -938,31 +940,33 @@ Results are written to `BenchmarkDotNet.Artifacts/results/` as Markdown, CSV, an
 
 #### Serialization Scenarios & Allocations
 
-*BenchmarkDotNet v0.15.8, .NET 10.0.9 (X64 RyuJIT x86-64-v3).*
+*BenchmarkDotNet v0.15.8, .NET 10.0.14 (X64 RyuJIT x86-64-v3).*
 
 | Method | Scenario | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :--- | :---: | :---: | :---: |
-| **Serialize_Complex_BitPack_ReusableBuffer** | Reused caller buffer | **106.775 ns** | **106.514 ns** | **0 B** |
-| Serialize_Complex_BitPack_FreshBuffer | Fresh byte array | 135.982 ns | 135.772 ns | 296 B |
-| Serialize_Complex_BitPack_PooledBuffer | ArrayPool byte array | 114.985 ns | 114.826 ns | 40 B |
-| Serialize_Complex_MemoryPack_ReusableWriter | Reused writer | 27.278 ns | 27.204 ns | 0 B |
-| Serialize_Complex_MemoryPack_FreshWriter | Fresh writer | 45.359 ns | 43.821 ns | 312 B |
-| Serialize_Complex_MessagePack_ReusableWriter | Reused writer | 103.857 ns | 103.753 ns | 0 B |
-| Serialize_Complex_MessagePack_FreshWriter | Fresh writer | 129.704 ns | 128.765 ns | 312 B |
-| Serialize_Complex_ProtoBuf_ReusableBuffer | Reused buffer | 343.284 ns | 343.380 ns | 64 B |
-| Serialize_Complex_ProtoBuf_FreshBuffer | Fresh buffer | 362.311 ns | 361.694 ns | 344 B |
-| Serialize_Complex_JsonContext_ReusableBuffer | Reused buffer | 952.025 ns | 947.801 ns | 5016 B |
-| Serialize_Complex_JsonContext_FreshBuffer | Fresh buffer | 1,016.394 ns | 1,010.441 ns | 6280 B |
+| **Serialize_Complex_BitPack_ReusableBuffer** | Reused caller buffer | **89.643 ns** | **89.016 ns** | **0 B** |
+| Serialize_Complex_BitPack_FreshBuffer | Fresh byte array | 112.794 ns | 112.714 ns | 312 B |
+| Serialize_Complex_BitPack_PooledBuffer | ArrayPool byte array | 100.174 ns | 99.757 ns | 56 B |
+| Serialize_Complex_MemoryPack_ReusableWriter | Reused writer | 26.813 ns | 26.823 ns | 0 B |
+| Serialize_Complex_MemoryPack_FreshWriter | Fresh writer | 45.361 ns | 44.358 ns | 312 B |
+| Serialize_Complex_MessagePack_ReusableWriter | Reused writer | 93.658 ns | 93.503 ns | 0 B |
+| Serialize_Complex_MessagePack_FreshWriter | Fresh writer | 127.472 ns | 127.933 ns | 312 B |
+| Serialize_Complex_ProtoBuf_ReusableBuffer | Reused buffer | 323.439 ns | 322.479 ns | 64 B |
+| Serialize_Complex_ProtoBuf_FreshBuffer | Fresh buffer | 344.210 ns | 343.355 ns | 344 B |
+| Serialize_Complex_JsonContext_ReusableBuffer | Reused buffer | 828.393 ns | 828.641 ns | 5016 B |
+| Serialize_Complex_JsonContext_FreshBuffer | Fresh buffer | 933.232 ns | 921.305 ns | 6280 B |
 
 #### Deserialization Speed & Allocations
 
 | Method | Mean Speed | Median Speed | Managed Allocated Memory |
 | :--- | :---: | :---: | :---: |
-| **Deserialize_Complex_BitPack** | **104.865 ns** | **103.978 ns** | **104 B** |
-| Deserialize_Complex_MemoryPack | 42.235 ns | 41.502 ns | 104 B |
-| Deserialize_Complex_MessagePack | 196.158 ns | 192.539 ns | 104 B |
-| Deserialize_Complex_ProtoBuf | 390.517 ns | 389.103 ns | 192 B |
-| Deserialize_Complex_JsonContext | 1,200.014 ns | 1,184.467 ns | 792 B |
+| **Deserialize_Complex_BitPack** | **87.639 ns** | **87.321 ns** | **104 B** |
+| Deserialize_Complex_MemoryPack | 37.556 ns | 37.615 ns | 104 B |
+| Deserialize_Complex_MessagePack | 197.882 ns | 197.695 ns | 104 B |
+| Deserialize_Complex_ProtoBuf | 402.442 ns | 401.800 ns | 192 B |
+| Deserialize_Complex_JsonContext | 1,131.529 ns | 1,135.658 ns | 792 B |
+
+*Note on `BitWriter` allocations:* the fresh/pooled BitPack rows include the `BitWriter` object itself. It now caches the backing array, offset and length (16 extra bytes) so each write avoids `Memory<byte>.Span` dispatch.
 
 *Note on allocations:* The 104 bytes allocated during `Deserialize_Complex_BitPack` represent the two deserialized `string` objects themselves (`"Alex"` and `"Multiplayer Engine Pilot"`). BitPack's deserializer internals perform 0 garbage/helper allocations.
 

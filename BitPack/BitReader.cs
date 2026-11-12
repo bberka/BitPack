@@ -1,11 +1,15 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace BitPack;
 
 public class BitReader
 {
     private readonly ReadOnlyMemory<byte> _buffer;
+    private readonly byte[]? _array;
+    private readonly int _offset;
+    private readonly int _length;
     private int _bitPosition;
 
     public BitReader(byte[] buffer)
@@ -16,6 +20,12 @@ public class BitReader
     public BitReader(ReadOnlyMemory<byte> buffer)
     {
         _buffer = buffer;
+        if (MemoryMarshal.TryGetArray(buffer, out var segment) && segment.Array != null)
+        {
+            _array = segment.Array;
+            _offset = segment.Offset;
+            _length = segment.Count;
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -124,7 +134,8 @@ public class BitReader
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private BitSpanReader CreateSpanReader()
     {
-        return new BitSpanReader(_buffer.Span, _bitPosition);
+        var span = _array != null ? new ReadOnlySpan<byte>(_array, _offset, _length) : _buffer.Span;
+        return new BitSpanReader(span, _bitPosition);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

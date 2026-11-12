@@ -1,11 +1,15 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace BitPack;
 
 public class BitWriter
 {
     private readonly Memory<byte> _buffer;
+    private readonly byte[]? _array;
+    private readonly int _offset;
+    private readonly int _length;
     private int _bitPosition;
 
     public BitWriter(byte[] buffer)
@@ -16,6 +20,12 @@ public class BitWriter
     public BitWriter(Memory<byte> buffer)
     {
         _buffer = buffer;
+        if (MemoryMarshal.TryGetArray<byte>(buffer, out var segment) && segment.Array != null)
+        {
+            _array = segment.Array;
+            _offset = segment.Offset;
+            _length = segment.Count;
+        }
     }
 
     /// <summary>
@@ -141,7 +151,9 @@ public class BitWriter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private BitSpanWriter CreateSpanWriter()
     {
-        return new BitSpanWriter(_buffer.Span, _bitPosition);
+        // Array-backed buffers (the common case) skip Memory<T>.Span's per-call type dispatch.
+        var span = _array != null ? new Span<byte>(_array, _offset, _length) : _buffer.Span;
+        return new BitSpanWriter(span, _bitPosition);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
